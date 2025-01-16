@@ -11,9 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class BaseScraper(ABC):
-    API_KEY = os.getenv("SCRAPER_API_KEY")
-    if not API_KEY:
-        raise ValueError("SCRAPER_API_KEY environment variable not set")
+    API_KEY = os.environ["SCRAPER_API_KEY"]
 
     def __init__(self):
         self.scraper_config = self.get_scraper_config()
