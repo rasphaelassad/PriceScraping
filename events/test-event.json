@@ -1,9 +1,0 @@
-{
-  "body": "{\"store_name\": \"walmart\", \"urls\": [\"https://www.walmart.com/ip/21553590/\"]}",
-  "resource": "/{proxy+}",
-  "path": "/get-prices",
-  "httpMethod": "POST",
-  "headers": {
-    "Content-Type": "application/json"
-  }
-} 

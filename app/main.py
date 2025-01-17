@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from schemas.request_schemas import PriceRequest, PriceResponse
-from scrapers.walmart_scraper import WalmartScraper
-from scrapers.albertsons_scraper import AlbertsonsScraper
+from .schemas.request_schemas import PriceRequest, PriceResponse
+from .scrapers.walmart_scraper import WalmartScraper
+from .scrapers.albertsons_scraper import AlbertsonsScraper
 import logging
 
 # Configure logging

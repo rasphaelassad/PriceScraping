@@ -42,3 +42,8 @@ node_modules/
 .pytest_cache/
 .coverage
 htmlcov/ 
+
+# Deployment
+deploy.sh 
+
+deploy.ps1 

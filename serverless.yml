@@ -1,24 +1,13 @@
-service: store-price-api
+service: price-scraping-api
 
 provider:
   name: aws
-  runtime: python3.9
+  runtime: python3.12
   region: us-east-1
+  timeout: 60
+  memorySize: 512
   environment:
     SCRAPER_API_KEY: ${env:SCRAPER_API_KEY}
-  timeout: 60  # Global timeout
-
-plugins:
-  - serverless-python-requirements
-
-custom:
-  pythonRequirements:
-    layer:
-      name: store-price-dependencies
-      description: Python dependencies for Store Price API
-    noDeploy:
-      - pytest
-      - pytest-asyncio
 
 functions:
   api:
@@ -27,18 +16,18 @@ functions:
       - http:
           path: /{proxy+}
           method: any
-    timeout: 60
-    memorySize: 512
     environment:
       STAGE: ${opt:stage, 'dev'}
 
-package:
-  patterns:
-    - '!.env'
-    - '!.git/**'
-    - '!tests/**'
-    - '!__pycache__/**'
-    - '!.pytest_cache/**'
-    - '!README.md'
-    - '!serverless.yml'
-    - '!node_modules/**' 
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    layer:
+      name: python-deps
+      description: Python dependencies
+    noDeploy:
+      - coverage
+      - pytest
+    dockerizePip: false 
