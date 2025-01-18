@@ -26,7 +26,7 @@ SUPPORTED_STORES = {
 }
 
 @app.post("/get-prices", response_model=PriceResponse)
-async def get_prices(request: PriceRequest):
+def get_prices(request: PriceRequest):
     store_name = request.store_name.lower()
     
     if store_name not in SUPPORTED_STORES:
@@ -37,16 +37,16 @@ async def get_prices(request: PriceRequest):
     
     try:
         scraper = SUPPORTED_STORES[store_name]()
-        results = await scraper.get_prices(request.urls)
+        results = scraper.get_prices(request.urls)
         return PriceResponse(results=results)
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return PriceResponse(results={}, error=str(e))
 
 @app.get("/supported-stores")
-async def get_supported_stores():
+def get_supported_stores():
     return {"supported_stores": list(SUPPORTED_STORES.keys())}
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "healthy"} 

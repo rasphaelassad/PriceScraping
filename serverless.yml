@@ -4,10 +4,19 @@ provider:
   name: aws
   runtime: python3.12
   region: us-east-1
-  timeout: 60
+  timeout: 120
   memorySize: 512
   environment:
     SCRAPER_API_KEY: ${env:SCRAPER_API_KEY}
+
+package:
+  patterns:
+    - '!./**'
+    - app/**
+    - lambda_handler.py
+    - requirements.txt
+    - '!**/*.pyc'
+    - '!**/__pycache__/**'
 
 functions:
   api:
@@ -30,4 +39,7 @@ custom:
     noDeploy:
       - coverage
       - pytest
-    dockerizePip: false 
+    dockerizePip: false
+    zip: true
+    slim: false
+    cleanupZipHelper: true
