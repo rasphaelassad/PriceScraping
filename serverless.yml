@@ -1,45 +1,15 @@
-service: price-scraping-api
+service: store-price-api
+frameworkVersion: '4'
 
 provider:
   name: aws
-  runtime: python3.12
-  region: us-east-1
-  timeout: 120
-  memorySize: 512
-  environment:
-    SCRAPER_API_KEY: ${env:SCRAPER_API_KEY}
-
-package:
-  patterns:
-    - '!./**'
-    - app/**
-    - lambda_handler.py
-    - requirements.txt
-    - '!**/*.pyc'
-    - '!**/__pycache__/**'
+  runtime: python3.9
 
 functions:
   api:
     handler: lambda_handler.handler
     events:
-      - http:
-          path: /{proxy+}
-          method: any
-    environment:
-      STAGE: ${opt:stage, 'dev'}
+      - httpApi: '*'
 
 plugins:
   - serverless-python-requirements
-
-custom:
-  pythonRequirements:
-    layer:
-      name: python-deps
-      description: Python dependencies
-    noDeploy:
-      - coverage
-      - pytest
-    dockerizePip: false
-    zip: true
-    slim: false
-    cleanupZipHelper: true

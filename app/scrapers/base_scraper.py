@@ -108,4 +108,5 @@ class BaseScraper(ABC):
                 logger.error(f"Error in batch processing: {str(e)}")
                 results = {str(url): None for url in urls}
 
+        logger.info(f"Final results before return: {results}")
         return results
