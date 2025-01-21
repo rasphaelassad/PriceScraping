@@ -30,6 +30,52 @@ class EC2Deployer:
             region_name='us-east-1'
         )
 
+    def check_prerequisites(self):
+        """Check if all prerequisites are met before deployment"""
+        try:
+            # Check if PuTTY is installed and in PATH
+            try:
+                putty_version = subprocess.run(['putty', '-version'], 
+                                            capture_output=True, 
+                                            text=True, 
+                                            check=True)
+                logger.info(f"PuTTY is installed: {putty_version.stdout.strip()}")
+            except subprocess.CalledProcessError:
+                logger.error("PuTTY is not found in PATH")
+                return False
+            except FileNotFoundError:
+                logger.error("PuTTY is not installed or not in PATH")
+                return False
+
+            # Check if puttygen is available
+            try:
+                puttygen_version = subprocess.run(['puttygen', '--version'], 
+                                               capture_output=True, 
+                                               text=True, 
+                                               check=True)
+                logger.info(f"PuTTYgen is installed: {puttygen_version.stdout.strip()}")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                logger.error("PuTTYgen is not found in PATH")
+                return False
+
+            # Check AWS credentials
+            if not all([os.getenv('AWS_ACCESS_KEY_ID'), 
+                       os.getenv('AWS_SECRET_ACCESS_KEY')]):
+                logger.error("AWS credentials are not properly configured in .env file")
+                return False
+
+            # Check if SCRAPER_API_KEY exists
+            if not os.getenv('SCRAPER_API_KEY'):
+                logger.error("SCRAPER_API_KEY is not set in .env file")
+                return False
+
+            logger.info("All prerequisites are met!")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error checking prerequisites: {str(e)}")
+            return False
+
     def terminate_previous_instances(self):
         """Terminate any existing instances with the PriceScraper tag"""
         try:
@@ -289,6 +335,11 @@ systemctl start pricescraper
     def deploy(self):
         """Main deployment method"""
         try:
+            logger.info("Checking prerequisites...")
+            if not self.check_prerequisites():
+                logger.error("Prerequisites check failed. Please fix the issues above and try again.")
+                return None
+
             logger.info("Starting deployment...")
             
             # Terminate any existing instances
@@ -319,6 +370,8 @@ systemctl start pricescraper
                 logger.info(f"3. Go to Connection > SSH > Auth > Credentials")
                 logger.info(f"4. Browse and select the private key file: {key_name}.ppk")
                 logger.info(f"5. Click Open to connect")
+                logger.info(f"\nApplication will be available at: http://{public_ip}")
+                logger.info("It may take 5-10 minutes for the application to be fully deployed.")
             else:
                 logger.warning("\nPPK conversion failed. You'll need to manually convert the .pem file using PuTTYgen")
                 logger.info(f"PEM file location: {key_name}.pem")
@@ -332,5 +385,13 @@ systemctl start pricescraper
             raise
 
 if __name__ == "__main__":
-    deployer = EC2Deployer()
-    deployer.deploy() 
+    try:
+        deployer = EC2Deployer()
+        public_ip = deployer.deploy()
+        if public_ip:
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    except Exception as e:
+        logger.error(f"Deployment failed: {str(e)}")
+        sys.exit(1) 
