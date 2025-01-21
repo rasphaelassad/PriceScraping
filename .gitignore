@@ -51,3 +51,7 @@ deploy.ps1
 deployment/
 lambda_deployment.zip
 .aws-sam/ 
+
+# SSH
+price-scraper-key.pem
+price-scraper-key.ppk

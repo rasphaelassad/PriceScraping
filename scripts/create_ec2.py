@@ -33,29 +33,117 @@ class EC2Deployer:
     def check_prerequisites(self):
         """Check if all prerequisites are met before deployment"""
         try:
-            # Check if PuTTY is installed and in PATH
+            # Debug: Print current PATH
+            current_path = os.environ.get('PATH', '')
+            logger.info("Current PATH entries:")
+            for path in current_path.split(';'):
+                if path.strip():
+                    logger.info(f"  - {path}")
+
+            # Common PuTTY installation paths on Windows
+            putty_paths = [
+                r"C:\Program Files\PuTTY",
+                r"C:\Program Files (x86)\PuTTY",
+                os.path.expanduser("~\\AppData\\Local\\Programs\\PuTTY"),
+                "."  # Current directory
+            ]
+            
+            # Debug: Check each potential PuTTY path
+            logger.info("Checking PuTTY paths:")
+            for putty_path in putty_paths:
+                if os.path.exists(putty_path):
+                    logger.info(f"  Found directory: {putty_path}")
+                    putty_exe = os.path.join(putty_path, "putty.exe")
+                    puttygen_exe = os.path.join(putty_path, "puttygen.exe")
+                    if os.path.exists(putty_exe):
+                        logger.info(f"  Found putty.exe at: {putty_exe}")
+                    if os.path.exists(puttygen_exe):
+                        logger.info(f"  Found puttygen.exe at: {puttygen_exe}")
+            
+            # Try to find PuTTY executables in PATH using where command
             try:
-                putty_version = subprocess.run(['putty', '-version'], 
-                                            capture_output=True, 
-                                            text=True, 
-                                            check=True)
-                logger.info(f"PuTTY is installed: {putty_version.stdout.strip()}")
+                where_putty = subprocess.run(['where', 'putty.exe'], 
+                                          capture_output=True, 
+                                          text=True, 
+                                          check=True)
+                logger.info(f"PuTTY found by 'where' command at: {where_putty.stdout.strip()}")
             except subprocess.CalledProcessError:
-                logger.error("PuTTY is not found in PATH")
-                return False
-            except FileNotFoundError:
-                logger.error("PuTTY is not installed or not in PATH")
+                logger.warning("Could not find putty.exe using 'where' command")
+
+            # Add PuTTY paths to system PATH temporarily
+            original_path = os.environ.get('PATH', '')
+            for putty_path in putty_paths:
+                if os.path.exists(putty_path):
+                    os.environ['PATH'] = f"{putty_path};{original_path}"
+                    logger.info(f"Added to PATH: {putty_path}")
+            
+            # Check if PuTTY is installed and in PATH
+            putty_found = False
+            try:
+                # Use PowerShell to check PuTTY version
+                ps_command = "(Get-Item (Get-Command putty).Source).VersionInfo.FileVersion"
+                putty_version = subprocess.run(
+                    ['powershell', '-Command', ps_command],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                if putty_version.stdout.strip():
+                    logger.info(f"PuTTY is installed: version {putty_version.stdout.strip()}")
+                    putty_found = True
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                logger.debug(f"Failed to get PuTTY version: {str(e)}")
+            
+            if not putty_found:
+                logger.error("""
+PuTTY is not found in PATH. Please try these troubleshooting steps:
+1. Verify PuTTY is installed:
+   - Open PowerShell and run: (Get-Item (Get-Command putty).Source).VersionInfo.FileVersion
+   - If this fails, PuTTY is not in PATH
+
+2. If PuTTY is installed but not found:
+   a) Find your PuTTY installation directory
+   b) Open System Properties (Win + Pause/Break)
+   c) Click 'Environment Variables'
+   d) Under System Variables, find and select 'Path'
+   e) Click 'Edit'
+   f) Verify the PuTTY directory is listed
+   g) If not, add it and click 'OK'
+
+3. Alternative installation:
+   - Download PuTTY from https://www.putty.org/
+   - Run the installer as Administrator
+   - Choose 'Add to PATH' during installation
+
+4. After making changes:
+   - Close and reopen PowerShell
+   - Try running the version check command again
+
+Current checked locations:
+""")
+                for path in putty_paths:
+                    logger.error(f"  - {path}")
                 return False
 
             # Check if puttygen is available
+            puttygen_found = False
             try:
-                puttygen_version = subprocess.run(['puttygen', '--version'], 
-                                               capture_output=True, 
-                                               text=True, 
-                                               check=True)
-                logger.info(f"PuTTYgen is installed: {puttygen_version.stdout.strip()}")
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                logger.error("PuTTYgen is not found in PATH")
+                # Use PowerShell to check PuTTYgen version
+                ps_command = "(Get-Item (Get-Command puttygen).Source).VersionInfo.FileVersion"
+                puttygen_version = subprocess.run(
+                    ['powershell', '-Command', ps_command],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                if puttygen_version.stdout.strip():
+                    logger.info(f"PuTTYgen is installed: version {puttygen_version.stdout.strip()}")
+                    puttygen_found = True
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                logger.debug(f"Failed to get PuTTYgen version: {str(e)}")
+            
+            if not puttygen_found:
+                logger.error("PuTTYgen is not found. It should have been installed with PuTTY.")
                 return False
 
             # Check AWS credentials
@@ -213,7 +301,12 @@ sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_c
 systemctl restart sshd
 
 # Clone repository and setup application
-git clone https://github.com/yourusername/PriceScraping.git /home/ubuntu/app
+cd /home/ubuntu
+rm -rf app
+git clone https://github.com/hoaglandl/PriceScraping.git app || {
+    echo "Failed to clone repository"
+    exit 1
+}
 chown -R ubuntu:ubuntu /home/ubuntu/app
 
 # Create .env file
@@ -227,7 +320,10 @@ EOL
 cd /home/ubuntu/app
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt || {
+    echo "Failed to install requirements"
+    exit 1
+}
 
 # Setup systemd service
 cat > /etc/systemd/system/pricescraper.service << EOL
@@ -264,11 +360,17 @@ server {
 EOL
 
 # Enable the Nginx site and restart services
-ln -s /etc/nginx/sites-available/pricescraper /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+ln -sf /etc/nginx/sites-available/pricescraper /etc/nginx/sites-enabled/
+systemctl daemon-reload
 systemctl enable nginx
 systemctl enable pricescraper
-systemctl start nginx
-systemctl start pricescraper
+systemctl restart nginx
+systemctl restart pricescraper
+
+# Check service status
+systemctl status pricescraper --no-pager
+systemctl status nginx --no-pager
 '''
 
         instance = self.ec2_resource.create_instances(
@@ -307,26 +409,56 @@ systemctl start pricescraper
             pem_file = f"{key_name}.pem"
             ppk_file = f"{key_name}.ppk"
             
-            # Check if puttygen is available
-            try:
-                # Use where on Windows to find puttygen
-                subprocess.run(['where', 'puttygen'], check=True, capture_output=True)
-            except subprocess.CalledProcessError:
-                logger.error("puttygen not found. Please ensure PuTTY is installed and added to PATH")
-                return False
+            # Common PuTTY installation paths on Windows
+            putty_paths = [
+                r"C:\Program Files\PuTTY",
+                r"C:\Program Files (x86)\PuTTY",
+            ]
             
-            # Convert key using puttygen
+            # Add PuTTY paths to system PATH temporarily
+            original_path = os.environ.get('PATH', '')
+            for putty_path in putty_paths:
+                if os.path.exists(putty_path):
+                    os.environ['PATH'] = f"{putty_path};{original_path}"
+                    break
+            
+            # Convert key using puttygen with correct parameters
             try:
-                subprocess.run([
-                    'puttygen',
+                # First, ensure the .pem file has the right permissions
+                os.chmod(pem_file, 0o600)
+                
+                # Convert using puttygen
+                convert_cmd = [
+                    'puttygen.exe',
                     pem_file,
-                    '-o', ppk_file,
-                    '-O', 'private'
-                ], check=True)
-                logger.info(f"Successfully converted {pem_file} to {ppk_file}")
-                return True
+                    '-O', 'private',
+                    '-o', ppk_file
+                ]
+                result = subprocess.run(
+                    convert_cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if os.path.exists(ppk_file):
+                    logger.info(f"Successfully converted {pem_file} to {ppk_file}")
+                    return True
+                else:
+                    logger.error("PPK file was not created despite successful command execution")
+                    return False
+                    
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error converting key to PPK format: {str(e)}")
+                logger.error(f"Command output: {e.stdout}")
+                logger.error(f"Command error: {e.stderr}")
+                logger.info("You can manually convert the key using these steps:")
+                logger.info("1. Open PuTTYgen")
+                logger.info("2. Click 'Load' and select the .pem file")
+                logger.info("3. Click 'Save private key' and save as .ppk")
+                return False
+            except FileNotFoundError:
+                logger.error("puttygen.exe not found. Please ensure PuTTY is installed correctly.")
                 return False
         except Exception as e:
             logger.error(f"Error during key conversion: {str(e)}")
