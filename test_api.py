@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE_URL = "https://d3nwb7p056.execute-api.us-east-1.amazonaws.com/dev"
+BASE_URL = "http://44.202.87.88"
 
 def test_health():
     response = requests.get(f"{BASE_URL}/health")
