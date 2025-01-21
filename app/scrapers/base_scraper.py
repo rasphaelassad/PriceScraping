@@ -5,6 +5,10 @@ import httpx
 import time
 import os
 import asyncio
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,4 +112,5 @@ class BaseScraper(ABC):
                 logger.error(f"Error in batch processing: {str(e)}")
                 results = {str(url): None for url in urls}
 
+        logger.info(f"Final results before return: {results}")
         return results

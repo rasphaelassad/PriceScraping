@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from .schemas.request_schemas import PriceRequest, PriceResponse
-from .scrapers.walmart_scraper import WalmartScraper
-from .scrapers.albertsons_scraper import AlbertsonsScraper
+from app.schemas.request_schemas import PriceRequest, PriceResponse
+from app.scrapers.walmart_scraper import WalmartScraper
+from app.scrapers.albertsons_scraper import AlbertsonsScraper
 import logging
 
 # Configure logging
@@ -20,13 +20,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def hello_world():
+    return {'message': 'Hello from FastAPI'}
+
+@app.get("/hello/{name}")
+def hello(name: str):
+    return {"message": f'Hello from FastAPI, {name}!'}
+
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
     "albertsons": AlbertsonsScraper
 }
 
 @app.post("/get-prices", response_model=PriceResponse)
-def get_prices(request: PriceRequest):
+async def get_prices(request: PriceRequest):
     store_name = request.store_name.lower()
     
     if store_name not in SUPPORTED_STORES:
@@ -36,9 +44,25 @@ def get_prices(request: PriceRequest):
         )
     
     try:
+        logger.info(f"Creating scraper for store: {store_name}")
         scraper = SUPPORTED_STORES[store_name]()
-        results = scraper.get_prices(request.urls)
-        return PriceResponse(results=results)
+        
+        logger.info(f"Fetching prices for URLs: {request.urls}")
+        results = await scraper.get_prices(request.urls)
+        
+        logger.info(f"Results type: {type(results)}")
+        logger.info(f"Results content: {results}")
+        
+        # Validate that results is a dictionary
+        if not isinstance(results, dict):
+            logger.error(f"Invalid results type: {type(results)}")
+            return PriceResponse(results={}, error="Invalid response format")
+        
+        # Create response
+        response = PriceResponse(results=results)
+        logger.info(f"Response created successfully: {response}")
+        return response
+        
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return PriceResponse(results={}, error=str(e))
