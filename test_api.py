@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://44.201.156.173"
 
 def test_health():
     response = requests.get(f"{BASE_URL}/health")
