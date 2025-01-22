@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE_URL = "http://44.201.156.173"
+BASE_URL = "http://localhost:8000"
 
 def test_health():
     response = requests.get(f"{BASE_URL}/health")
@@ -17,10 +17,9 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "walmart",
+        "store_name": "albertsons",
         "urls": [
-            "https://www.walmart.com/ip/Great-Value-Whole-Vitamin-D-Milk-Gallon-128-fl-oz/10450114",
-            "https://www.walmart.com/ip/Great-Value-Large-White-Eggs-12-Count/145051970"
+            "https://www.albertsons.com/shop/product-details.970021707.html"
         ]
     }
     
