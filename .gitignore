@@ -56,4 +56,5 @@ lambda_deployment.zip
 price-scraper-key.pem
 price-scraper-key.ppk
 
-scripts/create_ec2.py
+scripts/
+sample_files/
