@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.schemas.request_schemas import PriceRequest, PriceResponse
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
+from app.scrapers.chef_store_scraper import ChefStoreScraper
 import logging
 
 # Configure logging
@@ -30,7 +31,8 @@ def hello(name: str):
 
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
-    "albertsons": AlbertsonsScraper
+    "albertsons": AlbertsonsScraper,
+    "chef_store": ChefStoreScraper
 }
 
 @app.post("/get-prices", response_model=PriceResponse)

@@ -17,9 +17,9 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "albertsons",
+        "store_name": "chef_store",
         "urls": [
-            "https://www.albertsons.com/shop/product-details.970021707.html"
+            "https://www.chefstore.com/p/star-ranch-angus-boneless-beef-ribeye_0283853/"
         ]
     }
     

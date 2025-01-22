@@ -34,7 +34,10 @@ class ChefStoreScraper(BaseScraper):
             
             # Extract store information
             store_link = selector.css('a.store-address-link::attr(href)').get()
-            store_id = store_link.split('/')[-2] if store_link else None
+            try:
+                store_id = store_link.split('/')[-2] if store_link else None
+            except (IndexError, AttributeError):
+                store_id = None
             store_address = selector.css('a.store-address-link::text').get()
             
             # Extract price from offers
