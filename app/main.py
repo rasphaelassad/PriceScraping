@@ -5,7 +5,7 @@ from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
-from app.models.database import SessionLocal, Product
+from app.models.database import SessionLocal, Product, PendingRequest
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import logging
@@ -65,6 +65,39 @@ def get_cached_results(db: Session, urls: list[str]) -> dict:
     
     return cached_products
 
+def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
+    """Get URLs that are currently being processed"""
+    pending = {}
+    # Clean up old pending requests (older than 10 minutes)
+    cleanup_time = datetime.utcnow() - timedelta(minutes=10)
+    db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
+    db.commit()
+    
+    for url in urls:
+        pending_request = (
+            db.query(PendingRequest)
+            .filter(PendingRequest.url == str(url))
+            .filter(PendingRequest.store == store)
+            .first()
+        )
+        if pending_request:
+            pending[str(url)] = True
+    
+    return pending
+
+def add_pending_requests(db: Session, store: str, urls: list[str]):
+    """Add URLs to pending requests"""
+    for url in urls:
+        pending = PendingRequest(store=store, url=str(url))
+        db.add(pending)
+    db.commit()
+
+def remove_pending_requests(db: Session, urls: list[str]):
+    """Remove URLs from pending requests"""
+    for url in urls:
+        db.query(PendingRequest).filter(PendingRequest.url == str(url)).delete()
+    db.commit()
+
 def cache_results(db: Session, results: dict):
     """Cache the results in the database. Skip products with null prices."""
     for url, product_info in results.items():
@@ -104,28 +137,50 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             logger.info("All results found in cache")
             return PriceResponse(results=cached_results)
         
-        # Fetch missing results
-        logger.info(f"Creating scraper for store: {store_name}")
-        scraper = SUPPORTED_STORES[store_name]()
+        # Check for pending requests
+        pending_requests = get_pending_requests(db, store_name, urls_to_fetch)
+        urls_to_fetch = [url for url in urls_to_fetch if str(url) not in pending_requests]
         
-        logger.info(f"Fetching prices for URLs: {urls_to_fetch}")
-        new_results = await scraper.get_prices(urls_to_fetch)
+        if not urls_to_fetch:
+            logger.info("All uncached URLs are currently being processed")
+            return PriceResponse(
+                results=cached_results,
+                error="Some URLs are currently being processed. Please try again in a few moments."
+            )
         
-        # Convert results to ProductInfo objects
-        processed_results = {}
-        for url, result in new_results.items():
-            if result:
-                result['timestamp'] = datetime.utcnow()
-                processed_results[url] = ProductInfo(**result)
+        # Add new URLs to pending requests
+        add_pending_requests(db, store_name, urls_to_fetch)
         
-        # Cache new results
-        cache_results(db, processed_results)
-        
-        # Combine cached and new results
-        all_results = {**cached_results, **processed_results}
-        
-        return PriceResponse(results=all_results)
-        
+        try:
+            # Fetch missing results
+            logger.info(f"Creating scraper for store: {store_name}")
+            scraper = SUPPORTED_STORES[store_name]()
+            
+            logger.info(f"Fetching prices for URLs: {urls_to_fetch}")
+            new_results = await scraper.get_prices(urls_to_fetch)
+            
+            # Convert results to ProductInfo objects
+            processed_results = {}
+            for url, result in new_results.items():
+                if result:
+                    result['timestamp'] = datetime.utcnow()
+                    processed_results[url] = ProductInfo(**result)
+            
+            # Cache new results
+            cache_results(db, processed_results)
+            
+            # Remove pending requests
+            remove_pending_requests(db, urls_to_fetch)
+            
+            # Combine cached and new results
+            all_results = {**cached_results, **processed_results}
+            
+            return PriceResponse(results=all_results)
+        except Exception as e:
+            # Remove pending requests on error
+            remove_pending_requests(db, urls_to_fetch)
+            raise
+            
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return PriceResponse(results={}, error=str(e))

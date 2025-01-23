@@ -74,5 +74,13 @@ class Product(Base):
             timestamp=self.timestamp
         )
 
+class PendingRequest(Base):
+    __tablename__ = "pending_request"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store = Column(String, index=True)
+    url = Column(String, unique=True, index=True)
+    timestamp = Column(DateTime, default=datetime.now)
+
 # Create all tables
 Base.metadata.create_all(bind=engine) 
