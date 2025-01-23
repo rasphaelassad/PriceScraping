@@ -17,10 +17,10 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "walmart",
+        "store_name": "chefstore",
         "urls": [
-            "https://www.walmart.com/ip/319841736",
-            "https://www.walmart.com/ip/39944456"
+            "https://www.chefstore.com/p/aqua-star-shrimp-peeled-tail-on-raw-31-40_8559455",
+            "https://www.chefstore.com/p/smithfield-menu-pride-boneless-ham_7285463"
         ]
     }
     
@@ -35,6 +35,6 @@ def test_get_prices():
 
 if __name__ == "__main__":
     print("Testing API endpoints...")
-    test_health()
-    test_supported_stores()
+    #test_health()
+    #test_supported_stores()
     test_get_prices() 

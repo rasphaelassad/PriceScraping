@@ -7,7 +7,7 @@ class ChefStoreScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         return {
             'max_cost': '30',
-            "retry_times": 1,
+            "retry_times": 3,
             "premium": False,
             "country_code": "us",
             "device_type": "desktop",
@@ -50,7 +50,7 @@ class ChefStoreScraper(BaseScraper):
                         price = data["offers"]["price"]
             
             result = {
-                "store": "chef_store",
+                "store": "chefstore",
                 "url": url,
                 "name": data.get("name"),
                 "price": float(price) if price else None,

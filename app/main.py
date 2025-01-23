@@ -4,7 +4,7 @@ from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
-from app.scrapers.chef_store_scraper import ChefStoreScraper
+from app.scrapers.chefstore_scraper import ChefStoreScraper
 from app.models.database import SessionLocal, Product
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -44,7 +44,7 @@ def hello(name: str):
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
     "albertsons": AlbertsonsScraper,
-    "chef_store": ChefStoreScraper,
+    "chefstore": ChefStoreScraper,
     "costco": CostcoScraper,
 }
 

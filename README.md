@@ -28,7 +28,7 @@ app/
     ├── walmart_scraper.py
     ├── costco_scraper.py
     ├── albertsons_scraper.py
-    └── chef_store_scraper.py
+    └── chefstore_scraper.py
 ```
 
 ## Standardized Output Format
