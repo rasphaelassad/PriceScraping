@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 class BaseScraper(ABC):
     API_KEY = os.environ["SCRAPER_API_KEY"]
-    print(API_KEY)
-
+    TIMEOUT_MINUTES = 10  # Timeout after 10 minutes
+    
     def __init__(self):
         self.scraper_config = self.get_scraper_config()
 
@@ -33,6 +33,7 @@ class BaseScraper(ABC):
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Get product information for multiple URLs in a single batch request"""
         results = {}
+        start_time = time.time()
         
         # Convert HttpUrl objects to strings
         url_strings = [str(url) for url in urls]
@@ -42,12 +43,11 @@ class BaseScraper(ABC):
                 # Submit batch job
                 api_url = "https://async.scraperapi.com/batchjobs"
                 payload = {
-                    "urls": url_strings,  # Use the string versions
+                    "urls": url_strings,
                     "apiKey": self.API_KEY,
                     "apiParams": self.scraper_config
                 }
 
-                # Debug logging
                 logger.info(f"Sending request to {api_url}")
                 logger.info(f"Payload: {payload}")
 
@@ -67,6 +67,17 @@ class BaseScraper(ABC):
 
                     # Poll for all jobs completion
                     while any(status['status'] == 'running' for status in job_statuses.values()):
+                        # Check if we've exceeded the timeout
+                        elapsed_minutes = (time.time() - start_time) / 60
+                        if elapsed_minutes >= self.TIMEOUT_MINUTES:
+                            logger.warning(f"Scraping timed out after {self.TIMEOUT_MINUTES} minutes")
+                            # Mark any remaining running jobs as failed
+                            for job_info in job_statuses.values():
+                                if job_info['status'] == 'running':
+                                    job_info['status'] = 'failed'
+                                    results[job_info['url']] = None
+                            break
+
                         for job_id, job_info in job_statuses.items():
                             if job_info['status'] == 'running':
                                 status_response = await client.get(job_info['statusUrl'])

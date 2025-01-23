@@ -17,9 +17,9 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "chef_store",
+        "store_name": "costco",
         "urls": [
-            "https://www.chefstore.com/p/star-ranch-angus-boneless-beef-ribeye_0283853/"
+            "https://sameday.costco.com/store/costco/products/16916808-coleman-natural-foods-organic-fresh-boneless-skinless-breast-per-lb-lb"
         ]
     }
     

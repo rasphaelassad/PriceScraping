@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.schemas.request_schemas import PriceRequest, PriceResponse
+from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chef_store_scraper import ChefStoreScraper
+from app.scrapers.costco_scraper import CostcoScraper
 import logging
 
 # Configure logging
@@ -32,7 +34,8 @@ def hello(name: str):
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
     "albertsons": AlbertsonsScraper,
-    "chef_store": ChefStoreScraper
+    "chef_store": ChefStoreScraper,
+    "costco": CostcoScraper,
 }
 
 @app.post("/get-prices", response_model=PriceResponse)
