@@ -5,10 +5,12 @@ from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
-from app.models.database import SessionLocal, Product, PendingRequest
+from app.models.database import SessionLocal, Product, PendingRequest, Base
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import logging
+from typing import List, Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +53,7 @@ SUPPORTED_STORES = {
 def get_cached_results(db: Session, urls: list[str]) -> dict:
     """Get cached results that are less than 24 hours old"""
     cached_products = {}
-    cutoff_time = datetime.utcnow() - timedelta(hours=24)
+    cutoff_time = datetime.now(ZoneInfo("UTC")) - timedelta(hours=24)
     
     for url in urls:
         cached = (
@@ -69,7 +71,7 @@ def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
     """Get URLs that are currently being processed"""
     pending = {}
     # Clean up old pending requests (older than 10 minutes)
-    cleanup_time = datetime.utcnow() - timedelta(minutes=10)
+    cleanup_time = datetime.now(ZoneInfo("UTC")) - timedelta(minutes=10)
     db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
     db.commit()
     
@@ -109,11 +111,14 @@ def cache_results(db: Session, results: dict):
         existing = db.query(Product).filter(Product.url == url).first()
         if existing:
             # Update existing cache entry
-            for key, value in product_info.dict().items():
+            product_info_dict = product_info.dict()
+            product_info_dict['timestamp'] = datetime.now(ZoneInfo("UTC"))
+            for key, value in product_info_dict.items():
                 setattr(existing, key, value)
         else:
             # Create new cache entry
             db_product = Product.from_product_info(product_info)
+            db_product.timestamp = datetime.now(ZoneInfo("UTC"))
             db.add(db_product)
     
     db.commit()
@@ -163,7 +168,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             processed_results = {}
             for url, result in new_results.items():
                 if result:
-                    result['timestamp'] = datetime.utcnow()
+                    result['timestamp'] = datetime.now(ZoneInfo("UTC"))
                     processed_results[url] = ProductInfo(**result)
             
             # Cache new results
@@ -191,4 +196,72 @@ def get_supported_stores():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"} 
+    return {"status": "healthy"}
+
+@app.get("/table/{table_name}")
+def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Get all data from a specified database table.
+    Currently supports: 'product' and 'pending_request' tables.
+    """
+    # Get the table class based on name
+    table_map = {
+        "product": Product,
+        "pending_request": PendingRequest
+    }
+    
+    if table_name not in table_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Table '{table_name}' not found. Available tables: {', '.join(table_map.keys())}"
+        )
+    
+    try:
+        # Query all records from the table
+        records = db.query(table_map[table_name]).all()
+        
+        # Convert records to list of dictionaries
+        if table_name == "product":
+            data = [
+                {
+                    "id": record.id,
+                    "store": record.store,
+                    "url": record.url,
+                    "name": record.name,
+                    "price": record.price,
+                    "price_string": record.price_string,
+                    "price_per_unit": record.price_per_unit,
+                    "price_per_unit_string": record.price_per_unit_string,
+                    "store_id": record.store_id,
+                    "store_address": record.store_address,
+                    "store_zip": record.store_zip,
+                    "brand": record.brand,
+                    "sku": record.sku,
+                    "category": record.category,
+                    "timestamp": record.timestamp.isoformat() if record.timestamp else None
+                }
+                for record in records
+            ]
+        else:  # pending_request table
+            data = [
+                {
+                    "id": record.id,
+                    "store": record.store,
+                    "url": record.url,
+                    "timestamp": record.timestamp.isoformat() if record.timestamp else None
+                }
+                for record in records
+            ]
+        
+        return {
+            "table": table_name,
+            "count": len(data),
+            "data": data
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching data from table {table_name}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching data from table: {str(e)}"
+        )
