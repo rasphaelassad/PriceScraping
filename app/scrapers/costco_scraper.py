@@ -20,9 +20,8 @@ class CostcoScraper(BaseScraper):
             "keep_headers": True,
             "headers": {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "zip_code": "28115"
-            }
+                "Accept-Language": "en-US,en;q=0.5"
+                }
         }
 
     def _extract_price_from_element(self, price_element) -> Tuple[Optional[float], Optional[str]]:
@@ -111,7 +110,7 @@ class CostcoScraper(BaseScraper):
             
             product_info = {
                 'store': 'costco',
-                'url': Url,
+                'url': url,
                 'name': name,
                 'price': price,
                 'price_string': price_string,
