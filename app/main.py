@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.schemas.request_schemas import PriceRequest, PriceResponse
+from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chef_store_scraper import ChefStoreScraper
-from app.scrapers.costco_scraper import CostcoScraper
+from app.models.database import SessionLocal, Product
+from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 import logging
 
 # Configure logging
@@ -23,6 +25,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Dependency to get database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 @app.get("/")
 def hello_world():
     return {'message': 'Hello from FastAPI'}
@@ -38,8 +48,45 @@ SUPPORTED_STORES = {
     "costco": CostcoScraper,
 }
 
+def get_cached_results(db: Session, urls: list[str]) -> dict:
+    """Get cached results that are less than 24 hours old"""
+    cached_products = {}
+    cutoff_time = datetime.utcnow() - timedelta(hours=24)
+    
+    for url in urls:
+        cached = (
+            db.query(Product)
+            .filter(Product.url == str(url))
+            .filter(Product.timestamp > cutoff_time)
+            .first()
+        )
+        if cached:
+            cached_products[str(url)] = cached.to_product_info()
+    
+    return cached_products
+
+def cache_results(db: Session, results: dict):
+    """Cache the results in the database. Skip products with null prices."""
+    for url, product_info in results.items():
+        if not product_info or product_info.price is None:
+            logger.info(f"Skipping product with null price for URL: {url}")
+            continue
+            
+        # Check if product exists in cache
+        existing = db.query(Product).filter(Product.url == url).first()
+        if existing:
+            # Update existing cache entry
+            for key, value in product_info.dict().items():
+                setattr(existing, key, value)
+        else:
+            # Create new cache entry
+            db_product = Product.from_product_info(product_info)
+            db.add(db_product)
+    
+    db.commit()
+
 @app.post("/get-prices", response_model=PriceResponse)
-async def get_prices(request: PriceRequest):
+async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
     store_name = request.store_name.lower()
     
     if store_name not in SUPPORTED_STORES:
@@ -49,24 +96,35 @@ async def get_prices(request: PriceRequest):
         )
     
     try:
+        # Check cache first
+        cached_results = get_cached_results(db, request.urls)
+        urls_to_fetch = [url for url in request.urls if str(url) not in cached_results]
+        
+        if not urls_to_fetch:
+            logger.info("All results found in cache")
+            return PriceResponse(results=cached_results)
+        
+        # Fetch missing results
         logger.info(f"Creating scraper for store: {store_name}")
         scraper = SUPPORTED_STORES[store_name]()
         
-        logger.info(f"Fetching prices for URLs: {request.urls}")
-        results = await scraper.get_prices(request.urls)
+        logger.info(f"Fetching prices for URLs: {urls_to_fetch}")
+        new_results = await scraper.get_prices(urls_to_fetch)
         
-        logger.info(f"Results type: {type(results)}")
-        logger.info(f"Results content: {results}")
+        # Convert results to ProductInfo objects
+        processed_results = {}
+        for url, result in new_results.items():
+            if result:
+                result['timestamp'] = datetime.utcnow()
+                processed_results[url] = ProductInfo(**result)
         
-        # Validate that results is a dictionary
-        if not isinstance(results, dict):
-            logger.error(f"Invalid results type: {type(results)}")
-            return PriceResponse(results={}, error="Invalid response format")
+        # Cache new results
+        cache_results(db, processed_results)
         
-        # Create response
-        response = PriceResponse(results=results)
-        logger.info(f"Response created successfully: {response}")
-        return response
+        # Combine cached and new results
+        all_results = {**cached_results, **processed_results}
+        
+        return PriceResponse(results=all_results)
         
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)

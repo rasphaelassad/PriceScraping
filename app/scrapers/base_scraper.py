@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, List, Optional
 import logging
 import httpx
 import time
 import os
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,6 +30,30 @@ class BaseScraper(ABC):
     async def extract_product_info(self, html: str, url: str) -> Dict:
         """Extract all product information from HTML content"""
         pass
+
+    def standardize_output(self, product_info: Dict) -> Dict:
+        """Standardize the output format across all scrapers"""
+        if not product_info:
+            return None
+
+        # Ensure all required fields are present with proper types
+        standardized = {
+            "store": str(product_info.get("store", "")),
+            "url": str(product_info.get("url", "")),
+            "name": str(product_info.get("name", "")),
+            "price": float(product_info["price"]) if product_info.get("price") is not None else None,
+            "price_string": str(product_info.get("price_string")) if product_info.get("price_string") else None,
+            "price_per_unit": float(product_info.get("price_per_unit")) if product_info.get("price_per_unit") else None,
+            "price_per_unit_string": str(product_info.get("price_per_unit_string")) if product_info.get("price_per_unit_string") else None,
+            "store_id": str(product_info.get("store_id")) if product_info.get("store_id") else None,
+            "store_address": str(product_info.get("store_address")) if product_info.get("store_address") else None,
+            "store_zip": str(product_info.get("store_zip")) if product_info.get("store_zip") else None,
+            "brand": str(product_info.get("brand")) if product_info.get("brand") else None,
+            "sku": str(product_info.get("sku")) if product_info.get("sku") else None,
+            "category": str(product_info.get("category")) if product_info.get("category") else None
+        }
+
+        return standardized
 
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Get product information for multiple URLs in a single batch request"""
@@ -97,6 +122,8 @@ class BaseScraper(ABC):
                                     if html:
                                         try:
                                             product_info = await self.extract_product_info(html, job_info['url'])
+                                            if product_info:
+                                                product_info = self.standardize_output(product_info)
                                             results[job_info['url']] = product_info
                                         except Exception as e:
                                             logger.error(f"Error processing URL {job_info['url']}: {str(e)}")

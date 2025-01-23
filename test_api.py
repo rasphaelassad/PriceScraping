@@ -17,9 +17,10 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "costco",
+        "store_name": "walmart",
         "urls": [
-            "https://sameday.costco.com/store/costco/products/16916808-coleman-natural-foods-organic-fresh-boneless-skinless-breast-per-lb-lb"
+            "https://www.walmart.com/ip/319841736",
+            "https://www.walmart.com/ip/39944456"
         ]
     }
     
@@ -34,6 +35,6 @@ def test_get_prices():
 
 if __name__ == "__main__":
     print("Testing API endpoints...")
-    #test_health()
-    #test_supported_stores()
+    test_health()
+    test_supported_stores()
     test_get_prices() 
