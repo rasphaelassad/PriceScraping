@@ -58,4 +58,11 @@ price-scraper-key.ppk
 
 scripts/
 sample_files/
+
+# AWS
+.aws/
+
+data/
+
+# Logs
 nohup.out
