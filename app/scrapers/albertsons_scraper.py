@@ -61,21 +61,17 @@ class AlbertsonsScraper(BaseScraper):
             logger.error(f"Error extracting product info: {e}")
             return None
 
-    def transform_url(self, url: str) -> str:
-        """Transform a regular Albertsons URL into an API URL"""
-        # Extract product ID from URL
-        if "product-details." in url:
-            product_id = url.split("product-details.")[1].split(".")[0]
-        else:
-            # If URL is already in API format, return as is
-            return url
-            
-        # Default store ID if not present
-        store_id = "177"  # You might want to make this configurable
+    def transform_url(self, url) -> str:
+        """Transform product detail URL to API URL"""
+        # Convert Pydantic Url to string
+        url = str(url)
         
-        # Construct API URL
-        api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId={store_id}"
-        return api_url
+        if "product-details." in url:
+            # Extract product ID from URL
+            product_id = url.split("product-details.")[-1].split(".")[0]
+            # Transform to API URL format
+            return f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId=177"
+        return url
 
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Override to transform URLs before processing"""

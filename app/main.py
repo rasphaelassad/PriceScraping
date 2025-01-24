@@ -7,11 +7,9 @@ from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
 from app.models.database import SessionLocal, Product, PendingRequest, Base
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import logging
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-
+import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,7 +51,7 @@ SUPPORTED_STORES = {
 def get_cached_results(db: Session, urls: list[str]) -> dict:
     """Get cached results that are less than 24 hours old"""
     cached_products = {}
-    cutoff_time = datetime.now(ZoneInfo("UTC")) - timedelta(hours=24)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
     
     for url in urls:
         cached = (
@@ -71,7 +69,7 @@ def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
     """Get URLs that are currently being processed"""
     pending = {}
     # Clean up old pending requests (older than 10 minutes)
-    cleanup_time = datetime.now(ZoneInfo("UTC")) - timedelta(minutes=10)
+    cleanup_time = datetime.now(timezone.utc) - timedelta(minutes=10)
     db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
     db.commit()
     
@@ -107,18 +105,21 @@ def cache_results(db: Session, results: dict):
             logger.info(f"Skipping product with null price for URL: {url}")
             continue
             
+        # Convert Pydantic Url to string for database storage
+        url_str = str(url)
+            
         # Check if product exists in cache
-        existing = db.query(Product).filter(Product.url == url).first()
+        existing = db.query(Product).filter(Product.url == url_str).first()
         if existing:
             # Update existing cache entry
             product_info_dict = product_info.dict()
-            product_info_dict['timestamp'] = datetime.now(ZoneInfo("UTC"))
+            product_info_dict['timestamp'] = datetime.now(timezone.utc)
             for key, value in product_info_dict.items():
                 setattr(existing, key, value)
         else:
             # Create new cache entry
             db_product = Product.from_product_info(product_info)
-            db_product.timestamp = datetime.now(ZoneInfo("UTC"))
+            db_product.timestamp = datetime.now(timezone.utc)
             db.add(db_product)
     
     db.commit()
@@ -168,7 +169,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             processed_results = {}
             for url, result in new_results.items():
                 if result:
-                    result['timestamp'] = datetime.now(ZoneInfo("UTC"))
+                    result['timestamp'] = datetime.now(timezone.utc)
                     processed_results[url] = ProductInfo(**result)
             
             # Cache new results
