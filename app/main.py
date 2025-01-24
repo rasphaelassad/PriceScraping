@@ -146,12 +146,24 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         if not scraper_class:
             raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
         
+        # Check cache first
+        cached_results = get_cached_results(db, urls)
+        if cached_results:
+            logger.info("Found cached results")
+            return PriceResponse(results=cached_results)
+            
+        # Check pending requests
+        pending = get_pending_requests(db, store_name, urls)
+        if pending:
+            logger.info("Request already in progress")
+            return PriceResponse(results={str(url): None for url in urls})
+        
         # Create an instance of the scraper
         scraper = scraper_class()
         
         logger.info(f"Fetching prices for URLs: {urls}")
         
-        # Add URLs to pending requests
+        # Add URLs to pending requests using original URLs
         add_pending_requests(db, store_name, urls)
         
         # Get prices
@@ -166,7 +178,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             else:
                 string_results[str(url)] = None
         
-        # Remove URLs from pending requests
+        # Remove URLs from pending requests using original URLs
         remove_pending_requests(db, urls)
         
         # Cache results

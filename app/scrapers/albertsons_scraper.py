@@ -75,11 +75,24 @@ class AlbertsonsScraper(BaseScraper):
 
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Override to transform URLs before processing"""
-        # Transform all URLs to API format
+        # Store original URLs
+        original_urls = [str(url) for url in urls]
+        
+        # Transform URLs to API format
         api_urls = [self.transform_url(url) for url in urls]
         
         # Call parent implementation with transformed URLs
         results = await super().get_prices(api_urls)
         
         # Map results back to original URLs
-        return dict(zip([str(url) for url in urls], results.values()))
+        original_results = {}
+        for orig_url, api_url in zip(original_urls, api_urls):
+            if api_url in results and results[api_url]:
+                # Ensure the result uses the original product URL
+                result = results[api_url].copy()
+                result['url'] = orig_url
+                original_results[orig_url] = result
+            else:
+                original_results[orig_url] = None
+                
+        return original_results
