@@ -43,10 +43,6 @@ def get_db():
 def hello_world():
     return {'message': 'Hello from FastAPI'}
 
-@app.get("/hello/{name}")
-def hello(name: str):
-    return {"message": f'Hello from FastAPI, {name}!'}
-
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
     "albertsons": AlbertsonsScraper,
