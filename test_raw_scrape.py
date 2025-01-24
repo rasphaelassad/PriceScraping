@@ -14,4 +14,10 @@ data = {
 response = requests.post(url, headers=headers, json=data)
 print(f"Status Code: {response.status_code}")
 print("Response:")
-print(json.dumps(response.json(), indent=2)) 
+print(json.dumps(response.json(), indent=2))
+
+# Save results to a file
+output_filename = 'scrape_results.json'
+with open(output_filename, 'w') as f:
+    json.dump(response.json(), f, indent=2)
+print(f"\nResults saved to {output_filename}") 

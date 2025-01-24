@@ -8,9 +8,9 @@ A FastAPI-based application that scrapes product prices from different online st
 - Async processing using ScraperAPI's batch endpoint
 - Store-specific configurations and parsing
 - Comprehensive product information including prices, metadata, and details
-- AWS Lambda deployment ready
 - 24-hour caching system to reduce API calls and improve response times
 - Standardized output format across all stores
+- Automatic saving of scraping results to JSON files
 
 ## Project Structure 
 
@@ -90,6 +90,7 @@ uvicorn app.main:app --reload
         "urls": ["product_url1", "product_url2"]
     }
     ```
+  - Response: Results are both returned in the API response and automatically saved to `scrape_results.json`
 
 ## Cache Management
 
@@ -97,3 +98,10 @@ The cache automatically:
 - Expires entries after 24 hours
 - Updates when new data is fetched
 - Maintains data consistency across requests
+
+## Results Storage
+
+All scraping results are automatically:
+- Saved to a JSON file (`scrape_results.json`)
+- Formatted with proper indentation for readability
+- Available for later analysis or processing
