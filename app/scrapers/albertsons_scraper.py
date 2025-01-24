@@ -1,88 +1,89 @@
-from parsel import Selector
-from .base_scraper import BaseScraper, logger
-from typing import Dict
+from typing import Dict, List
 import json
+import logging
+from .base_scraper import BaseScraper
+
+logger = logging.getLogger(__name__)
 
 class AlbertsonsScraper(BaseScraper):
-    def get_scraper_config(self) -> dict:
+    def __init__(self):
+        super().__init__(mode="async")  # Use async parallel mode instead of batch
+    
+    def get_scraper_config(self) -> Dict:
+        """Return scraper configuration for Albertsons"""
         return {
-            "untra_premium": True,
-            'max_cost': '30',
-            "retry_times": 1,
-            "country_code": "us",
-            "device_type": "desktop",
-            "keep_headers": True,
             "headers": {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5"
-            }
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "ocp-apim-subscription-key": "6c21edb7bcda4f0e918348db16147431"
+            },
+            "country": "us",
+            "keepHeaders": True
         }
 
     async def extract_product_info(self, html: str, url: str) -> Dict:
+        """Extract product information from Albertsons API response"""
         try:
-            logger.info(f"Starting to extract product info for URL: {url}")
-            selector = Selector(text=html)
+            # Parse the JSON response
+            data = json.loads(html)
             
-            # Extract product name from meta tags
-            name = selector.css('meta[property="og:title"]::attr(content)').get()
-            if name:
-                name = name.replace("- albertsons", "").strip()
+            # Get the product from catalog response
+            product = data.get('catalog', {}).get('response', {}).get('docs', [{}])[0]
+            if not product:
+                logger.error("No product found in catalog response")
+                return None
             
-            # Find script containing initialPdpResponse
-            scripts = selector.css('script::text').getall()
-            price = None
-            price_per_pound = None
-            store_id = None
-            
-            for script in scripts:
-                if 'initialPdpResponse' in script:
-                    try:
-                        # Find the start of the JSON object
-                        start_idx = script.find('initialPdpResponse')
-                        if start_idx != -1:
-                            # Extract the relevant portion of the JSON
-                            json_text = script[start_idx:]
-                            json_start = json_text.find('{')
-                            if json_start != -1:
-                                json_text = json_text[json_start:]
-                                # Find matching closing brace
-                                brace_count = 1
-                                end_idx = -1
-                                for j, char in enumerate(json_text[1:], 1):
-                                    if char == '{':
-                                        brace_count += 1
-                                    elif char == '}':
-                                        brace_count -= 1
-                                        if brace_count == 0:
-                                            end_idx = j + 1
-                                            break
-                                
-                                if end_idx != -1:
-                                    json_text = json_text[:end_idx]
-                                    json_text = json_text.replace('\\"', '"')
-                                    data = json.loads(json_text)
-                                    catalog_data = data.get('catalog', {}).get('response', {}).get('docs', [{}])[0]
-                                    price = catalog_data.get('price')
-                                    price_per_pound = catalog_data.get('pricePer')
-                                    store_id = catalog_data.get('storeId')
-                                    break
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON decode error: {str(e)}")
-                        continue
-            
-            result = {
-                "store": "albertsons",
-                "store_id": store_id,
-                "url": url,
-                "name": name,
-                "price": float(price) if price else None,
-                "price_string": f"${price:.2f}" if price else None,
-                "price_per_pound_string": f"${price_per_pound:.2f}" if price_per_pound else None,
-                "price_per_pound": float(price_per_pound) if price_per_pound else None
+            # Build the standardized product information
+            product_info = {
+                "store": "Albertsons",
+                "url": f"https://www.albertsons.com/shop/product-details.{product.get('pid')}.html",
+                "name": product.get('name'),
+                "price": float(product.get('price', 0)),
+                "price_string": f"${product.get('price', '0')}",
+                "price_per_unit": float(product.get('pricePer', 0)) if product.get('pricePer') else None,
+                "price_per_unit_string": f"${product.get('pricePer', '0')}/Lb" if product.get('pricePer') else None,
+                "store_id": product.get('storeId'),
+                "store_address": None,  # Not available in this API response
+                "store_zip": None,  # Not available in this API response
+                "brand": None,  # Not directly available in this response
+                "sku": product.get('pid'),
+                "category": f"{product.get('departmentName', '')}/{product.get('shelfName', '')}"
             }
-            
-            logger.info(f"Successfully extracted product info: {result}")
-            return result
-        except Exception as e:
-            logger.error(f"Error parsing Albertsons product info: {str(e)}")
+
+            logger.info(f"Successfully extracted product info: {product_info}")
+            return product_info
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
             return None
+        except Exception as e:
+            logger.error(f"Error extracting product info: {e}")
+            return None
+
+    def transform_url(self, url: str) -> str:
+        """Transform a regular Albertsons URL into an API URL"""
+        # Extract product ID from URL
+        if "product-details." in url:
+            product_id = url.split("product-details.")[1].split(".")[0]
+        else:
+            # If URL is already in API format, return as is
+            return url
+            
+        # Default store ID if not present
+        store_id = "177"  # You might want to make this configurable
+        
+        # Construct API URL
+        api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId={store_id}"
+        return api_url
+
+    async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
+        """Override to transform URLs before processing"""
+        # Transform all URLs to API format
+        api_urls = [self.transform_url(url) for url in urls]
+        
+        # Call parent implementation with transformed URLs
+        results = await super().get_prices(api_urls)
+        
+        # Map results back to original URLs
+        return dict(zip(urls, results.values()))

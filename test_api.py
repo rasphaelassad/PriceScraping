@@ -17,10 +17,10 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "chefstore",
+        "store_name": "albertsons",
         "urls": [
-            "https://www.chefstore.com/p/aqua-star-shrimp-peeled-tail-on-raw-31-40_8559455",
-            "https://www.chefstore.com/p/smithfield-menu-pride-boneless-ham_7285463"
+            "https://www.albertsons.com/shop/product-details.960263347.html",
+            "https://www.albertsons.com/shop/product-details.960109428.html"
         ]
     }
     
