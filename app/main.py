@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import logging
+from sqlalchemy import inspect
+from fastapi.responses import JSONResponse
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -266,3 +269,73 @@ def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, 
             status_code=500,
             detail=f"Error fetching data from table: {str(e)}"
         )
+
+@app.get("/tables")
+def get_tables(db: Session = Depends(get_db)):
+    """Get all tables in the database and their structure"""
+    try:
+        inspector = inspect(db.bind)
+        database_info = {}
+        
+        for table_name in inspector.get_table_names():
+            columns = []
+            for column in inspector.get_columns(table_name):
+                columns.append({
+                    "name": column["name"],
+                    "type": str(column["type"]),
+                    "nullable": column["nullable"]
+                })
+            
+            database_info[table_name] = {
+                "columns": columns,
+                "row_count": db.query(db.bind.table_metadata.tables[table_name]).count()
+            }
+            
+        return JSONResponse(content=database_info)
+    except Exception as e:
+        logger.error(f"Error getting database tables: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/raw-scrape")
+async def get_raw_html(request: PriceRequest, db: Session = Depends(get_db)):
+    """Get raw HTML/JSON response without processing"""
+    try:
+        store_name = request.store_name.lower()
+        urls = request.urls
+        
+        logger.info(f"Creating scraper for store: {store_name}")
+        scraper_class = SUPPORTED_STORES.get(store_name)
+        
+        if not scraper_class:
+            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
+            
+        scraper = scraper_class()
+        
+        logger.info(f"Fetching raw content for URLs: {urls}")
+        
+        raw_results = {}
+        for url in urls:
+            try:
+                # Use the scraper's _fetch_url method to get raw response
+                response = await scraper._fetch_url(str(url))
+                if response:
+                    raw_results[str(url)] = {
+                        "content": response,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                else:
+                    raw_results[str(url)] = {
+                        "error": "Failed to fetch content",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+            except Exception as e:
+                raw_results[str(url)] = {
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+        
+        return JSONResponse(content=raw_results)
+        
+    except Exception as e:
+        logger.error(f"Error processing raw scrape request: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

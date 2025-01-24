@@ -17,10 +17,11 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "albertsons",
+        "store_name": "walmart",
         "urls": [
-            "https://www.albertsons.com/shop/product-details.960263347.html",
-            "https://www.albertsons.com/shop/product-details.960109428.html"
+            "https://www.walmart.com/ip/319841736",
+            "https://www.walmart.com/ip/39944456",
+            "https://www.walmart.com/ip/51259086"
         ]
     }
     
