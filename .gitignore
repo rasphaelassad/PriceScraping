@@ -32,39 +32,51 @@ ENV/
 *.swp
 *.swo
 
-# AWS
-.serverless/
-
-# Node (for Serverless)
-node_modules/
-
 # Testing
 .pytest_cache/
 .coverage
-htmlcov/ 
+htmlcov/
+test/scrape_results.json
 
-# Deployment
-deploy.sh 
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-deploy.ps1 
+# Logs and temporary files
+*.log
+nohup.out
+*.tmp
+*.temp
 
-deployment/
-lambda_deployment.zip
-.aws-sam/ 
+# Local development
+local_settings.py
+*.local
 
-# SSH
-price-scraper-key.pem
-price-scraper-key.ppk
-
-scripts/
+# Sample and test data
 sample_files/
-
-# AWS
-.aws/
-
+test/responses/
 data/
 
-# Logs
-nohup.out
+# Deployment
+deploy.sh
+deploy.ps1
+deployment/
+lambda_deployment.zip
+.aws-sam/
+.serverless/
+.aws/
 
-test/
+# Credentials and keys
+*.pem
+*.ppk
+*_key.*
+credentials.json
+config.json
+
+# Node (for Serverless)
+node_modules/
+package-lock.json
+
+#scripts
+scripts/

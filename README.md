@@ -1,34 +1,40 @@
 # Store Price API
 
-A FastAPI-based application that scrapes product prices from different online stores using ScraperAPI. Supports multiple stores with store-specific configurations and parsing logic.
+A FastAPI-based application that scrapes product prices from various online grocery stores and retailers. The system provides a unified API interface for retrieving product information and prices across different stores while implementing efficient caching and standardized output formats.
 
 ## Features
 
-- Batch scraping of multiple URLs
-- Async processing using ScraperAPI's batch endpoint
-- Store-specific configurations and parsing
-- Comprehensive product information including prices, metadata, and details
-- 24-hour caching system to reduce API calls and improve response times
-- Standardized output format across all stores
-- Automatic saving of scraping results to JSON files
+- Multi-store support (Walmart, Albertsons, ChefStore, and more)
+- Efficient price scraping with store-specific implementations
+- SQLite-based caching system for improved performance
+- Standardized JSON output format across all stores
+- Comprehensive error handling and logging
+- Automated test suite for scrapers and API endpoints
+- Configurable scraping parameters per store
 
 ## Project Structure 
 
 ```
 app/
 ├── __init__.py
-├── main.py                 # FastAPI application
+├── main.py                # FastAPI application entry point
 ├── models/
-│   └── database.py        # SQLAlchemy models for caching
-├── schemas/
-│   └── request_schemas.py # Pydantic models for API
-└── scrapers/
-    ├── __init__.py
-    ├── base_scraper.py    # Base scraper with common functionality
-    ├── walmart_scraper.py
-    ├── costco_scraper.py
-    ├── albertsons_scraper.py
-    └── chefstore_scraper.py
+│   └── database.py       # SQLite database models
+├── scrapers/
+│   ├── __init__.py
+│   ├── base_scraper.py   # Abstract base scraper class
+│   ├── albertsons_scraper.py
+│   ├── chefstore_scraper.py
+│   └── walmart_scraper.py
+└── schemas/              # API request/response schemas
+
+test/
+├── test_api.py          # API endpoint tests
+├── test_raw_scrape.py   # Scraper implementation tests
+└── scrape_results.json  # Test results cache
+
+data/                    # Database and persistent storage
+└── scraper.db          # SQLite database file
 ```
 
 ## Standardized Output Format
@@ -53,36 +59,49 @@ All scrapers return product information in a standardized format:
 }
 ```
 
-## Caching System
-
-The application includes a SQLite-based caching system that:
-- Stores product information for 24 hours
-- Reduces API calls to external services
-- Improves response times for frequently requested products
-- Automatically updates cached data when it expires
-
 ## Setup and Installation
 
-1. Clone the repository
-2. Install dependencies:
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd PriceScraping
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+.\venv\Scripts\activate   # Windows
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
-3. Set up environment variables:
+
+4. Set up environment variables:
 ```bash
+# Create a .env file with the following:
 SCRAPER_API_KEY=your_api_key_here
+DATABASE_URL=sqlite:///data/scraper.db
 ```
-4. Run the application:
+
+5. Run the application:
 ```bash
+python run.py
+# or
 uvicorn app.main:app --reload
 ```
 
 ## API Endpoints
 
-- `GET /`: Welcome message
+### Base Endpoints
+- `GET /`: Welcome message and API status
 - `GET /health`: Health check endpoint
-- `GET /supported-stores`: List of supported stores
-- `POST /get-prices`: Get prices for products
+- `GET /supported-stores`: List of supported stores and their configurations
+
+### Price Scraping
+- `POST /get-prices`: Retrieve prices for products
   - Request body:
     ```json
     {
@@ -90,18 +109,37 @@ uvicorn app.main:app --reload
         "urls": ["product_url1", "product_url2"]
     }
     ```
-  - Response: Results are both returned in the API response and automatically saved to `scrape_results.json`
+  - Response: JSON array of standardized product information
+
+## Testing
+
+Run the test suite:
+```bash
+pytest
+```
+
+The test suite includes:
+- API endpoint tests
+- Individual scraper tests
+- Database model tests
+- Integration tests
 
 ## Cache Management
 
-The cache automatically:
-- Expires entries after 24 hours
-- Updates when new data is fetched
-- Maintains data consistency across requests
+The SQLite-based caching system:
+- Stores successful scrape results for 24 hours
+- Automatically invalidates old entries
+- Reduces API calls and improves response times
+- Handles concurrent requests efficiently
 
-## Results Storage
+## Contributing
 
-All scraping results are automatically:
-- Saved to a JSON file (`scrape_results.json`)
-- Formatted with proper indentation for readability
-- Available for later analysis or processing
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
