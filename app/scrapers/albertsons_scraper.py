@@ -82,4 +82,4 @@ class AlbertsonsScraper(BaseScraper):
         results = await super().get_prices(api_urls)
         
         # Map results back to original URLs
-        return dict(zip(urls, results.values()))
+        return dict(zip([str(url) for url in urls], results.values()))

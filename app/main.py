@@ -88,8 +88,16 @@ def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
 def add_pending_requests(db: Session, store: str, urls: list[str]):
     """Add URLs to pending requests"""
     for url in urls:
-        pending = PendingRequest(store=store, url=str(url))
-        db.add(pending)
+        url_str = str(url)
+        # Check if request already exists
+        existing = db.query(PendingRequest).filter(PendingRequest.url == url_str).first()
+        if existing:
+            # Update timestamp of existing request
+            existing.timestamp = datetime.now(timezone.utc)
+        else:
+            # Create new request
+            pending = PendingRequest(store=store, url=url_str)
+            db.add(pending)
     db.commit()
 
 def remove_pending_requests(db: Session, urls: list[str]):
@@ -100,10 +108,14 @@ def remove_pending_requests(db: Session, urls: list[str]):
 
 def cache_results(db: Session, results: dict):
     """Cache the results in the database. Skip products with null prices."""
-    for url, product_info in results.items():
-        if not product_info or product_info.price is None:
+    for url, product_info_dict in results.items():
+        if not product_info_dict or product_info_dict.get('price') is None:
             logger.info(f"Skipping product with null price for URL: {url}")
             continue
+            
+        # Convert dictionary to ProductInfo model
+        product_info_dict['timestamp'] = datetime.now(timezone.utc)
+        product_info = ProductInfo(**product_info_dict)
             
         # Convert Pydantic Url to string for database storage
         url_str = str(url)
@@ -113,83 +125,59 @@ def cache_results(db: Session, results: dict):
         if existing:
             # Update existing cache entry
             product_info_dict = product_info.dict()
-            product_info_dict['timestamp'] = datetime.now(timezone.utc)
             for key, value in product_info_dict.items():
                 setattr(existing, key, value)
         else:
             # Create new cache entry
             db_product = Product.from_product_info(product_info)
-            db_product.timestamp = datetime.now(timezone.utc)
             db.add(db_product)
     
     db.commit()
 
-@app.post("/get-prices", response_model=PriceResponse)
+@app.post("/get-prices")
 async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
-    store_name = request.store_name.lower()
-    
-    if store_name not in SUPPORTED_STORES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Store '{store_name}' not supported. Supported stores: {', '.join(SUPPORTED_STORES.keys())}"
-        )
-    
     try:
-        # Check cache first
-        cached_results = get_cached_results(db, request.urls)
-        urls_to_fetch = [url for url in request.urls if str(url) not in cached_results]
+        store_name = request.store_name.lower()
+        urls = request.urls
         
-        if not urls_to_fetch:
-            logger.info("All results found in cache")
-            return PriceResponse(results=cached_results)
+        logger.info(f"Creating scraper for store: {store_name}")
+        scraper_class = SUPPORTED_STORES.get(store_name)
         
-        # Check for pending requests
-        pending_requests = get_pending_requests(db, store_name, urls_to_fetch)
-        urls_to_fetch = [url for url in urls_to_fetch if str(url) not in pending_requests]
+        if not scraper_class:
+            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
         
-        if not urls_to_fetch:
-            logger.info("All uncached URLs are currently being processed")
-            return PriceResponse(
-                results=cached_results,
-                error="Some URLs are currently being processed. Please try again in a few moments."
-            )
+        # Create an instance of the scraper
+        scraper = scraper_class()
         
-        # Add new URLs to pending requests
-        add_pending_requests(db, store_name, urls_to_fetch)
+        logger.info(f"Fetching prices for URLs: {urls}")
         
-        try:
-            # Fetch missing results
-            logger.info(f"Creating scraper for store: {store_name}")
-            scraper = SUPPORTED_STORES[store_name]()
+        # Add URLs to pending requests
+        add_pending_requests(db, store_name, urls)
+        
+        # Get prices
+        results = await scraper.get_prices(urls)
+        
+        # Convert results to ProductInfo models
+        string_results = {}
+        for url, price_info in results.items():
+            if price_info:
+                price_info['timestamp'] = datetime.now(timezone.utc)
+                string_results[str(url)] = ProductInfo(**price_info)
+            else:
+                string_results[str(url)] = None
+        
+        # Remove URLs from pending requests
+        remove_pending_requests(db, urls)
+        
+        # Cache results
+        if results:
+            cache_results(db, results)
             
-            logger.info(f"Fetching prices for URLs: {urls_to_fetch}")
-            new_results = await scraper.get_prices(urls_to_fetch)
-            
-            # Convert results to ProductInfo objects
-            processed_results = {}
-            for url, result in new_results.items():
-                if result:
-                    result['timestamp'] = datetime.now(timezone.utc)
-                    processed_results[url] = ProductInfo(**result)
-            
-            # Cache new results
-            cache_results(db, processed_results)
-            
-            # Remove pending requests
-            remove_pending_requests(db, urls_to_fetch)
-            
-            # Combine cached and new results
-            all_results = {**cached_results, **processed_results}
-            
-            return PriceResponse(results=all_results)
-        except Exception as e:
-            # Remove pending requests on error
-            remove_pending_requests(db, urls_to_fetch)
-            raise
-            
+        return PriceResponse(results=string_results)
+        
     except Exception as e:
-        logger.error(f"Error processing request: {str(e)}", exc_info=True)
-        return PriceResponse(results={}, error=str(e))
+        logger.error(f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/supported-stores")
 def get_supported_stores():
