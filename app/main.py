@@ -12,6 +12,9 @@ from typing import List, Dict, Any
 import logging
 from sqlalchemy import inspect
 from fastapi.responses import JSONResponse
+import httpx
+import time
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -312,27 +315,7 @@ async def get_raw_html(request: PriceRequest, db: Session = Depends(get_db)):
         scraper = scraper_class()
         
         logger.info(f"Fetching raw content for URLs: {urls}")
-        
-        raw_results = {}
-        for url in urls:
-            try:
-                # Use the scraper's _fetch_url method to get raw response
-                response = await scraper._fetch_url(str(url))
-                if response:
-                    raw_results[str(url)] = {
-                        "content": response,
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
-                else:
-                    raw_results[str(url)] = {
-                        "error": "Failed to fetch content",
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
-            except Exception as e:
-                raw_results[str(url)] = {
-                    "error": str(e),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
+        raw_results = await scraper.get_raw_content(urls)
         
         return JSONResponse(content=raw_results)
         
