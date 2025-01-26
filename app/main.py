@@ -148,46 +148,62 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         if not scraper_class:
             raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
         
+        # Initialize results dictionary
+        final_results = {}
+        
         # Check cache first
         cached_results = get_cached_results(db, urls)
-        if cached_results:
-            logger.info("Found cached results")
-            return PriceResponse(results=cached_results)
+        final_results.update(cached_results)
+        
+        # Remove cached URLs from further processing
+        urls_to_process = [url for url in urls if str(url) not in cached_results]
+        
+        if not urls_to_process:
+            logger.info("All URLs found in cache")
+            return PriceResponse(results=final_results)
             
         # Check pending requests
-        pending = get_pending_requests(db, store_name, urls)
-        if pending:
-            logger.info("Request already in progress")
-            return PriceResponse(results={str(url): None for url in urls})
+        pending = get_pending_requests(db, store_name, urls_to_process)
+        
+        # Add pending URLs to results as None and remove from processing
+        for url in urls_to_process[:]:
+            if str(url) in pending:
+                final_results[str(url)] = None
+                urls_to_process.remove(url)
+        
+        if not urls_to_process:
+            logger.info("Remaining URLs are all pending")
+            return PriceResponse(results=final_results)
         
         # Create an instance of the scraper
         scraper = scraper_class()
         
-        logger.info(f"Fetching prices for URLs: {urls}")
+        logger.info(f"Fetching prices for URLs: {urls_to_process}")
         
         # Add URLs to pending requests using original URLs
-        add_pending_requests(db, store_name, urls)
+        add_pending_requests(db, store_name, urls_to_process)
         
-        # Get prices
-        results = await scraper.get_prices(urls)
-        
-        # Convert results to ProductInfo models
-        string_results = {}
-        for url, price_info in results.items():
-            if price_info:
-                price_info['timestamp'] = datetime.now(timezone.utc)
-                string_results[str(url)] = ProductInfo(**price_info)
-            else:
-                string_results[str(url)] = None
-        
-        # Remove URLs from pending requests using original URLs
-        remove_pending_requests(db, urls)
-        
-        # Cache results
-        if results:
-            cache_results(db, results)
+        try:
+            # Get prices for remaining URLs
+            results = await scraper.get_prices(urls_to_process)
             
-        return PriceResponse(results=string_results)
+            # Convert results to ProductInfo models
+            for url, price_info in results.items():
+                if price_info:
+                    price_info['timestamp'] = datetime.now(timezone.utc)
+                    final_results[str(url)] = ProductInfo(**price_info)
+                else:
+                    final_results[str(url)] = None
+            
+            # Cache successful results
+            if results:
+                cache_results(db, results)
+                
+        finally:
+            # Always remove URLs from pending requests
+            remove_pending_requests(db, urls_to_process)
+        
+        return PriceResponse(results=final_results)
         
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")

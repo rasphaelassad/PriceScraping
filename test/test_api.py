@@ -17,11 +17,11 @@ def test_supported_stores():
 
 def test_get_prices():
     data = {
-        "store_name": "walmart",
+        "store_name": "chefstore",
         "urls": [
-            "https://www.walmart.com/ip/319841736",
-            "https://www.walmart.com/ip/39944456",
-            "https://www.walmart.com/ip/51259086"
+            "https://www.chefstore.com/p/smithfield-menu-pride-boneless-ham_7285463",
+            "https://www.chefstore.com/p/aqua-star-shrimp-peeled-tail-on-raw-31-40_8559455",
+            "https://www.chefstore.com/p/boneless-beef-chuck-roll_2071225"
         ]
     }
     
