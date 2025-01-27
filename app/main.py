@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo
+from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo, RequestStatus, UrlResult
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
-from app.models.database import SessionLocal, Product, PendingRequest, Base
+from app.models.database import SessionLocal, Product, PendingRequest, Base, RequestCache
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
@@ -151,57 +151,287 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         # Initialize results dictionary
         final_results = {}
         
-        # Check cache first
-        cached_results = get_cached_results(db, urls)
-        final_results.update(cached_results)
+        # Clean up stale cache entries
+        cleanup_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        db.query(RequestCache).filter(RequestCache.update_time < cleanup_time).delete()
+        db.commit()
         
-        # Remove cached URLs from further processing
-        urls_to_process = [url for url in urls if str(url) not in cached_results]
-        
-        if not urls_to_process:
-            logger.info("All URLs found in cache")
-            return PriceResponse(results=final_results)
+        # Process each URL
+        urls_to_process = []
+        for url in urls:
+            url_str = str(url)
+            now = datetime.now(timezone.utc)
             
-        # Check pending requests
-        pending = get_pending_requests(db, store_name, urls_to_process)
-        
-        # Add pending URLs to results as None and remove from processing
-        for url in urls_to_process[:]:
-            if str(url) in pending:
-                final_results[str(url)] = None
-                urls_to_process.remove(url)
-        
-        if not urls_to_process:
-            logger.info("Remaining URLs are all pending")
-            return PriceResponse(results=final_results)
-        
-        # Create an instance of the scraper
-        scraper = scraper_class()
-        
-        logger.info(f"Fetching prices for URLs: {urls_to_process}")
-        
-        # Add URLs to pending requests using original URLs
-        add_pending_requests(db, store_name, urls_to_process)
-        
-        try:
-            # Get prices for remaining URLs
-            results = await scraper.get_prices(urls_to_process)
+            # Check existing cache entry
+            cache_entry = (
+                db.query(RequestCache)
+                .filter(RequestCache.url == url_str)
+                .filter(RequestCache.store == store_name)
+                .order_by(RequestCache.update_time.desc())
+                .first()
+            )
             
-            # Convert results to ProductInfo models
-            for url, price_info in results.items():
-                if price_info:
-                    price_info['timestamp'] = datetime.now(timezone.utc)
-                    final_results[str(url)] = ProductInfo(**price_info)
-                else:
-                    final_results[str(url)] = None
-            
-            # Cache successful results
-            if results:
-                cache_results(db, results)
+            if cache_entry:
+                elapsed_time = (now - cache_entry.start_time).total_seconds()
                 
-        finally:
-            # Always remove URLs from pending requests
-            remove_pending_requests(db, urls_to_process)
+                if cache_entry.status == 'completed':
+                    # Get from product cache if completed
+                    product = (
+                        db.query(Product)
+                        .filter(Product.url == url_str)
+                        .filter(Product.store == store_name)
+                        .order_by(Product.timestamp.desc())
+                        .first()
+                    )
+                    
+                    status = RequestStatus(
+                        status='completed',
+                        job_id=cache_entry.job_id,
+                        start_time=cache_entry.start_time,
+                        elapsed_time_seconds=elapsed_time,
+                        remaining_time_seconds=0,
+                        price_found=cache_entry.price_found,
+                        error_message=cache_entry.error_message,
+                        details=f"Request completed in {elapsed_time:.1f} seconds"
+                    )
+                    
+                    if product and not cache_entry.is_stale:
+                        final_results[url_str] = UrlResult(
+                            result=product.to_product_info(),
+                            request_status=status
+                        )
+                        continue
+                
+                elif cache_entry.status == 'pending' and cache_entry.is_active:
+                    # Still processing
+                    remaining_time = max(0, 600 - elapsed_time)  # 600 seconds = 10 minutes
+                    status = RequestStatus(
+                        status='running',
+                        job_id=cache_entry.job_id,
+                        start_time=cache_entry.start_time,
+                        elapsed_time_seconds=elapsed_time,
+                        remaining_time_seconds=remaining_time,
+                        price_found=None,
+                        error_message=None,
+                        details=f"Request running for {elapsed_time:.1f} seconds, {remaining_time:.1f} seconds remaining"
+                    )
+                    
+                    final_results[url_str] = UrlResult(
+                        result=None,
+                        request_status=status
+                    )
+                    continue
+                
+                elif cache_entry.status in ['failed', 'timeout']:
+                    status = RequestStatus(
+                        status=cache_entry.status,
+                        job_id=cache_entry.job_id,
+                        start_time=cache_entry.start_time,
+                        elapsed_time_seconds=elapsed_time,
+                        remaining_time_seconds=0,
+                        price_found=cache_entry.price_found,
+                        error_message=cache_entry.error_message,
+                        details=f"Request {cache_entry.status} after {elapsed_time:.1f} seconds"
+                    )
+                    
+                    final_results[url_str] = UrlResult(
+                        result=None,
+                        request_status=status
+                    )
+                    continue
+            
+            # URL needs processing
+            urls_to_process.append(url)
+            
+            # Generate a unique job ID
+            job_id = f"{store_name}_{int(time.time())}_{len(urls_to_process)}"
+            
+            # Create pending entry
+            new_cache_entry = RequestCache(
+                store=store_name,
+                url=url_str,
+                job_id=job_id,
+                status='pending',
+                start_time=now,
+                update_time=now
+            )
+            db.add(new_cache_entry)
+            db.commit()
+            
+            # Add pending result with status
+            status = RequestStatus(
+                status='running',
+                job_id=job_id,
+                start_time=now,
+                elapsed_time_seconds=0,
+                remaining_time_seconds=600,  # 10 minutes
+                price_found=None,
+                error_message=None,
+                details="Request just started"
+            )
+            
+            final_results[url_str] = UrlResult(
+                result=None,
+                request_status=status
+            )
+        
+        # Process new URLs in background if any
+        if urls_to_process:
+            # Create an instance of the scraper
+            scraper = scraper_class()
+            
+            # Function to process URLs in background
+            async def process_urls_background():
+                try:
+                    logger.info(f"Starting background processing for URLs: {urls_to_process}")
+                    
+                    try:
+                        # Set a 10-minute timeout for the scraping
+                        async with asyncio.timeout(600):  # 10 minutes in seconds
+                            results = await scraper.get_prices(urls_to_process)
+                            
+                            # Update cache and store results
+                            for url in urls_to_process:
+                                url_str = str(url)
+                                cache_entry = (
+                                    db.query(RequestCache)
+                                    .filter(RequestCache.url == url_str)
+                                    .filter(RequestCache.store == store_name)
+                                    .order_by(RequestCache.update_time.desc())
+                                    .first()
+                                )
+                                
+                                if cache_entry:
+                                    price_info = results.get(url_str)
+                                    if price_info:
+                                        # Update cache entry
+                                        cache_entry.status = 'completed'
+                                        cache_entry.price_found = True
+                                        cache_entry.update_time = datetime.now(timezone.utc)
+                                        
+                                        # Store in product cache
+                                        price_info['timestamp'] = datetime.now(timezone.utc)
+                                        cache_results(db, {url_str: price_info})
+                                    else:
+                                        cache_entry.status = 'completed'
+                                        cache_entry.price_found = False
+                                        cache_entry.update_time = datetime.now(timezone.utc)
+                                        cache_entry.error_message = "Price not found"
+                                    
+                                    db.commit()
+                                    
+                    except asyncio.TimeoutError:
+                        logger.error("Background processing timed out after 10 minutes")
+                        # Update cache entries as timed out
+                        for url in urls_to_process:
+                            url_str = str(url)
+                            cache_entry = (
+                                db.query(RequestCache)
+                                .filter(RequestCache.url == url_str)
+                                .filter(RequestCache.store == store_name)
+                                .order_by(RequestCache.update_time.desc())
+                                .first()
+                            )
+                            if cache_entry:
+                                cache_entry.status = 'timeout'
+                                cache_entry.update_time = datetime.now(timezone.utc)
+                                cache_entry.error_message = "Request timed out after 10 minutes"
+                        db.commit()
+                    except Exception as e:
+                        logger.error(f"Error in background processing: {str(e)}")
+                        # Update cache entries as failed
+                        for url in urls_to_process:
+                            url_str = str(url)
+                            cache_entry = (
+                                db.query(RequestCache)
+                                .filter(RequestCache.url == url_str)
+                                .filter(RequestCache.store == store_name)
+                                .order_by(RequestCache.update_time.desc())
+                                .first()
+                            )
+                            if cache_entry:
+                                cache_entry.status = 'failed'
+                                cache_entry.update_time = datetime.now(timezone.utc)
+                                cache_entry.error_message = str(e)
+                        db.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Background task error: {str(e)}")
+            
+            # Start background processing
+            asyncio.create_task(process_urls_background())
+        
+        # Wait up to 1 minute for immediate results
+        if urls_to_process:
+            try:
+                async with asyncio.timeout(60):  # 1 minute timeout
+                    while True:
+                        # Check if any URLs are now in product cache
+                        new_cached = get_cached_results(db, urls_to_process)
+                        if new_cached:
+                            for url_str, product_info in new_cached.items():
+                                cache_entry = (
+                                    db.query(RequestCache)
+                                    .filter(RequestCache.url == url_str)
+                                    .filter(RequestCache.store == store_name)
+                                    .order_by(RequestCache.update_time.desc())
+                                    .first()
+                                )
+                                
+                                if cache_entry:
+                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
+                                    status = RequestStatus(
+                                        status='completed',
+                                        job_id=cache_entry.job_id,
+                                        start_time=cache_entry.start_time,
+                                        elapsed_time_seconds=elapsed_time,
+                                        remaining_time_seconds=0,
+                                        price_found=cache_entry.price_found,
+                                        error_message=cache_entry.error_message,
+                                        details=f"Request completed in {elapsed_time:.1f} seconds"
+                                    )
+                                    
+                                    final_results[url_str] = UrlResult(
+                                        result=product_info,
+                                        request_status=status
+                                    )
+                            
+                            urls_to_process = [url for url in urls_to_process if str(url) not in new_cached]
+                            if not urls_to_process:
+                                break
+                        
+                        # Update status for remaining URLs
+                        for url in urls_to_process:
+                            url_str = str(url)
+                            if url_str in final_results:
+                                cache_entry = (
+                                    db.query(RequestCache)
+                                    .filter(RequestCache.url == url_str)
+                                    .filter(RequestCache.store == store_name)
+                                    .order_by(RequestCache.update_time.desc())
+                                    .first()
+                                )
+                                
+                                if cache_entry:
+                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
+                                    remaining_time = max(0, 600 - elapsed_time)
+                                    
+                                    status = RequestStatus(
+                                        status='running',
+                                        job_id=cache_entry.job_id,
+                                        start_time=cache_entry.start_time,
+                                        elapsed_time_seconds=elapsed_time,
+                                        remaining_time_seconds=remaining_time,
+                                        price_found=None,
+                                        error_message=None,
+                                        details=f"Request running for {elapsed_time:.1f} seconds, {remaining_time:.1f} seconds remaining"
+                                    )
+                                    
+                                    final_results[url_str].request_status = status
+                        
+                        await asyncio.sleep(5)
+            except asyncio.TimeoutError:
+                logger.info("Timeout reached, returning partial results with status")
         
         return PriceResponse(results=final_results)
         

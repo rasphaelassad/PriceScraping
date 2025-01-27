@@ -22,6 +22,20 @@ class ProductInfo(BaseModel):
     category: Optional[str]
     timestamp: datetime
 
+class RequestStatus(BaseModel):
+    status: str  # 'completed', 'running', 'failed', 'timeout'
+    job_id: Optional[str]
+    start_time: datetime
+    elapsed_time_seconds: float
+    remaining_time_seconds: Optional[float]
+    price_found: Optional[bool]
+    error_message: Optional[str]
+    details: Optional[str]
+
+class UrlResult(BaseModel):
+    result: Optional[ProductInfo]
+    request_status: RequestStatus
+
 class PriceResponse(BaseModel):
-    results: Dict[str, Optional[ProductInfo]]
+    results: Dict[str, UrlResult]
     error: Optional[str] = None 

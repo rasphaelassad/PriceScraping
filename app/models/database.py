@@ -1,14 +1,15 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, create_engine
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 import os
 
 # Create the database directory if it doesn't exist
 os.makedirs('data', exist_ok=True)
 
 # Create database engine
-SQLALCHEMY_DATABASE_URL = "sqlite:///./data/scraper.db"
+SQLALCHEMY_DATABASE_URL = os.getenv('DATABASE_URL', "sqlite:///data/scraper.db")
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
 # Create session factory
@@ -22,7 +23,7 @@ class Product(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     store = Column(String, index=True)
-    url = Column(String, unique=True, index=True)
+    url = Column(String, index=True)
     name = Column(String)
     price = Column(Float)
     price_string = Column(String)
@@ -34,7 +35,7 @@ class Product(Base):
     brand = Column(String)
     sku = Column(String)
     category = Column(String)
-    timestamp = Column(DateTime, default=datetime.now)
+    timestamp = Column(DateTime, default=datetime.now(timezone.utc))
 
     @classmethod
     def from_product_info(cls, product_info):
@@ -73,6 +74,33 @@ class Product(Base):
             category=self.category,
             timestamp=self.timestamp
         )
+
+class RequestCache(Base):
+    __tablename__ = "request_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store = Column(String, index=True)
+    url = Column(String, index=True)
+    job_id = Column(String, index=True)
+    status = Column(String, index=True)  # 'pending', 'completed', 'failed', 'timeout'
+    start_time = Column(DateTime, default=datetime.now(timezone.utc))
+    update_time = Column(DateTime, default=datetime.now(timezone.utc))
+    price_found = Column(Boolean, default=False)
+    error_message = Column(String, nullable=True)
+
+    @property
+    def is_active(self) -> bool:
+        """Check if the request is still active (less than 10 minutes old)"""
+        if self.status in ['completed', 'failed', 'timeout']:
+            return False
+        now = datetime.now(timezone.utc)
+        return (now - self.start_time).total_seconds() < 600  # 10 minutes
+
+    @property
+    def is_stale(self) -> bool:
+        """Check if the request is stale (older than 24 hours)"""
+        now = datetime.now(timezone.utc)
+        return (now - self.update_time).total_seconds() > 86400  # 24 hours
 
 class PendingRequest(Base):
     __tablename__ = "pending_request"
