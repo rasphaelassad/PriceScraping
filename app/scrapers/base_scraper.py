@@ -203,6 +203,30 @@ class BaseScraper(ABC):
         if not product_info:
             return None
 
+        logger.debug(f"Standardizing output - input timestamp: {product_info.get('timestamp')}, type: {type(product_info.get('timestamp'))}")
+        
+        # Ensure timestamp is timezone-aware
+        timestamp = product_info.get("timestamp")
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        elif isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                timestamp = timestamp.astimezone(timezone.utc)
+            except ValueError:
+                timestamp = datetime.now(timezone.utc)
+        elif isinstance(timestamp, datetime):
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            else:
+                timestamp = timestamp.astimezone(timezone.utc)
+        else:
+            timestamp = datetime.now(timezone.utc)
+        
+        logger.debug(f"Standardized timestamp: {timestamp}, tzinfo: {timestamp.tzinfo}")
+
         # Ensure all required fields are present with proper types
         standardized = {
             "store": str(product_info.get("store", "")),
@@ -217,7 +241,8 @@ class BaseScraper(ABC):
             "store_zip": str(product_info.get("store_zip")) if product_info.get("store_zip") else None,
             "brand": str(product_info.get("brand")) if product_info.get("brand") else None,
             "sku": str(product_info.get("sku")) if product_info.get("sku") else None,
-            "category": str(product_info.get("category")) if product_info.get("category") else None
+            "category": str(product_info.get("category")) if product_info.get("category") else None,
+            "timestamp": timestamp
         }
 
         return standardized
@@ -232,8 +257,38 @@ class BaseScraper(ABC):
         for url, result in raw_results.items():
             if "content" in result:
                 try:
+                    # Parse timestamp from raw result
+                    logger.debug(f"Raw timestamp: {result.get('timestamp')}, type: {type(result.get('timestamp'))}")
+                    raw_timestamp = result.get("timestamp")
+                    if raw_timestamp is None:
+                        timestamp = datetime.now(timezone.utc)
+                    elif isinstance(raw_timestamp, str):
+                        try:
+                            timestamp = datetime.fromisoformat(raw_timestamp.replace('Z', '+00:00'))
+                            if timestamp.tzinfo is None:
+                                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                            timestamp = timestamp.astimezone(timezone.utc)
+                        except ValueError:
+                            timestamp = datetime.now(timezone.utc)
+                    elif isinstance(raw_timestamp, datetime):
+                        if raw_timestamp.tzinfo is None:
+                            timestamp = raw_timestamp.replace(tzinfo=timezone.utc)
+                        else:
+                            timestamp = raw_timestamp.astimezone(timezone.utc)
+                    else:
+                        timestamp = datetime.now(timezone.utc)
+                    
+                    logger.debug(f"Parsed timestamp: {timestamp}, tzinfo: {timestamp.tzinfo}")
+                    
+                    # Extract product info
                     product_info = await self.extract_product_info(result["content"], url)
-                    processed_results[url] = self.standardize_output(product_info) if product_info else None
+                    if product_info:
+                        # Ensure product info has the timestamp
+                        product_info["timestamp"] = timestamp
+                        logger.debug(f"Product info timestamp: {product_info['timestamp']}, tzinfo: {product_info['timestamp'].tzinfo}")
+                        processed_results[url] = self.standardize_output(product_info)
+                    else:
+                        processed_results[url] = None
                 except Exception as e:
                     logger.error(f"Error processing URL {url}: {str(e)}")
                     processed_results[url] = None

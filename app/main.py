@@ -17,7 +17,7 @@ import time
 import asyncio
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Store Price API")
@@ -54,6 +54,7 @@ def get_cached_results(db: Session, urls: list[str]) -> dict:
     """Get cached results that are less than 24 hours old"""
     cached_products = {}
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
+    logger.debug(f"Checking cache with cutoff_time: {cutoff_time}, tzinfo: {cutoff_time.tzinfo}")
     
     for url in urls:
         cached = (
@@ -63,6 +64,7 @@ def get_cached_results(db: Session, urls: list[str]) -> dict:
             .first()
         )
         if cached:
+            logger.debug(f"Found cached product with timestamp: {cached.timestamp}, tzinfo: {cached.timestamp.tzinfo}")
             cached_products[str(url)] = cached.to_product_info()
     
     return cached_products
@@ -115,24 +117,46 @@ def cache_results(db: Session, results: dict):
             logger.info(f"Skipping product with null price for URL: {url}")
             continue
             
-        # Convert dictionary to ProductInfo model
-        product_info_dict['timestamp'] = datetime.now(timezone.utc)
-        product_info = ProductInfo(**product_info_dict)
+        try:
+            # Ensure timestamp is properly set
+            current_time = datetime.now(timezone.utc)
+            if 'timestamp' not in product_info_dict or product_info_dict['timestamp'] is None:
+                product_info_dict['timestamp'] = current_time
+            elif isinstance(product_info_dict['timestamp'], str):
+                try:
+                    product_info_dict['timestamp'] = datetime.fromisoformat(product_info_dict['timestamp'].replace('Z', '+00:00'))
+                except ValueError:
+                    product_info_dict['timestamp'] = current_time
+            elif isinstance(product_info_dict['timestamp'], datetime):
+                if product_info_dict['timestamp'].tzinfo is None:
+                    product_info_dict['timestamp'] = product_info_dict['timestamp'].replace(tzinfo=timezone.utc)
+                else:
+                    product_info_dict['timestamp'] = product_info_dict['timestamp'].astimezone(timezone.utc)
             
-        # Convert Pydantic Url to string for database storage
-        url_str = str(url)
+            logger.debug(f"Product info timestamp before conversion: {product_info_dict['timestamp']}, type: {type(product_info_dict['timestamp'])}")
             
-        # Check if product exists in cache
-        existing = db.query(Product).filter(Product.url == url_str).first()
-        if existing:
-            # Update existing cache entry
-            product_info_dict = product_info.dict()
-            for key, value in product_info_dict.items():
-                setattr(existing, key, value)
-        else:
-            # Create new cache entry
-            db_product = Product.from_product_info(product_info)
-            db.add(db_product)
+            # Convert dictionary to ProductInfo model
+            product_info = ProductInfo(**product_info_dict)
+            logger.debug(f"Product info timestamp after conversion: {product_info.timestamp}, tzinfo: {product_info.timestamp.tzinfo}")
+                
+            # Convert Pydantic Url to string for database storage
+            url_str = str(url)
+                
+            # Check if product exists in cache
+            existing = db.query(Product).filter(Product.url == url_str).first()
+            if existing:
+                # Update existing cache entry
+                product_info_dict = product_info.dict()
+                for key, value in product_info_dict.items():
+                    setattr(existing, key, value)
+            else:
+                # Create new cache entry
+                db_product = Product.from_product_info(product_info)
+                db.add(db_product)
+        
+        except Exception as e:
+            logger.error(f"Error caching results for URL {url}: {str(e)}")
+            continue
     
     db.commit()
 
@@ -153,6 +177,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         
         # Clean up stale cache entries
         cleanup_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        logger.debug(f"Cleaning up cache with cleanup_time: {cleanup_time}, tzinfo: {cleanup_time.tzinfo}")
         db.query(RequestCache).filter(RequestCache.update_time < cleanup_time).delete()
         db.commit()
         
@@ -161,6 +186,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         for url in urls:
             url_str = str(url)
             now = datetime.now(timezone.utc)
+            logger.debug(f"Processing URL {url_str} at time: {now}, tzinfo: {now.tzinfo}")
             
             # Check existing cache entry
             cache_entry = (
@@ -172,7 +198,9 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             )
             
             if cache_entry:
+                logger.debug(f"Found cache entry - status: {cache_entry.status}, start_time: {cache_entry.start_time}, tzinfo: {cache_entry.start_time.tzinfo}")
                 elapsed_time = (now - cache_entry.start_time).total_seconds()
+                logger.debug(f"Calculated elapsed_time: {elapsed_time}")
                 
                 if cache_entry.status == 'completed':
                     # Get from product cache if completed
@@ -196,6 +224,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                     )
                     
                     if product and not cache_entry.is_stale:
+                        logger.debug(f"Using cached product with timestamp: {product.timestamp}, tzinfo: {product.timestamp.tzinfo}")
                         final_results[url_str] = UrlResult(
                             result=product.to_product_info(),
                             request_status=status
@@ -302,26 +331,28 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                                 )
                                 
                                 if cache_entry:
+                                    now = datetime.now(timezone.utc)
                                     price_info = results.get(url_str)
                                     if price_info:
                                         # Update cache entry
                                         cache_entry.status = 'completed'
                                         cache_entry.price_found = True
-                                        cache_entry.update_time = datetime.now(timezone.utc)
+                                        cache_entry.update_time = now
                                         
                                         # Store in product cache
-                                        price_info['timestamp'] = datetime.now(timezone.utc)
+                                        price_info['timestamp'] = now
                                         cache_results(db, {url_str: price_info})
                                     else:
                                         cache_entry.status = 'completed'
                                         cache_entry.price_found = False
-                                        cache_entry.update_time = datetime.now(timezone.utc)
+                                        cache_entry.update_time = now
                                         cache_entry.error_message = "Price not found"
                                     
                                     db.commit()
                                     
                     except asyncio.TimeoutError:
                         logger.error("Background processing timed out after 10 minutes")
+                        now = datetime.now(timezone.utc)
                         # Update cache entries as timed out
                         for url in urls_to_process:
                             url_str = str(url)
@@ -334,11 +365,12 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                             )
                             if cache_entry:
                                 cache_entry.status = 'timeout'
-                                cache_entry.update_time = datetime.now(timezone.utc)
+                                cache_entry.update_time = now
                                 cache_entry.error_message = "Request timed out after 10 minutes"
                         db.commit()
                     except Exception as e:
                         logger.error(f"Error in background processing: {str(e)}")
+                        now = datetime.now(timezone.utc)
                         # Update cache entries as failed
                         for url in urls_to_process:
                             url_str = str(url)
@@ -351,7 +383,7 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                             )
                             if cache_entry:
                                 cache_entry.status = 'failed'
-                                cache_entry.update_time = datetime.now(timezone.utc)
+                                cache_entry.update_time = now
                                 cache_entry.error_message = str(e)
                         db.commit()
                     
@@ -379,7 +411,8 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                                 )
                                 
                                 if cache_entry:
-                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
+                                    now = datetime.now(timezone.utc)
+                                    elapsed_time = (now - cache_entry.start_time).total_seconds()
                                     status = RequestStatus(
                                         status='completed',
                                         job_id=cache_entry.job_id,
@@ -413,7 +446,8 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                                 )
                                 
                                 if cache_entry:
-                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
+                                    now = datetime.now(timezone.utc)
+                                    elapsed_time = (now - cache_entry.start_time).total_seconds()
                                     remaining_time = max(0, 600 - elapsed_time)
                                     
                                     status = RequestStatus(

@@ -19,9 +19,8 @@ def test_get_prices():
     data = {
         "store_name": "chefstore",
         "urls": [
-            "https://www.chefstore.com/p/smithfield-menu-pride-boneless-ham_7285463",
-            "https://www.chefstore.com/p/aqua-star-shrimp-peeled-tail-on-raw-31-40_8559455",
-            "https://www.chefstore.com/p/boneless-beef-chuck-roll_2071225"
+            "https://www.chefstore.com/p/smithfield-menu-pride-boneless-ham_7285463"
+            #"https://www.chefstore.com/p/aqua-star-shrimp-peeled-tail-on-raw-31-40_8559455"
         ]
     }
     

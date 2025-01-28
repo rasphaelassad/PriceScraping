@@ -1,6 +1,14 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
+
+def ensure_utc_datetime(dt):
+    """Helper function to ensure a datetime is timezone-aware UTC"""
+    if dt is None:
+        return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 class PriceRequest(BaseModel):
     store_name: str
@@ -22,6 +30,10 @@ class ProductInfo(BaseModel):
     category: Optional[str]
     timestamp: datetime
 
+    @validator('timestamp', pre=True)
+    def ensure_timestamp_utc(cls, v):
+        return ensure_utc_datetime(v)
+
 class RequestStatus(BaseModel):
     status: str  # 'completed', 'running', 'failed', 'timeout'
     job_id: Optional[str]
@@ -31,6 +43,10 @@ class RequestStatus(BaseModel):
     price_found: Optional[bool]
     error_message: Optional[str]
     details: Optional[str]
+
+    @validator('start_time', pre=True)
+    def ensure_start_time_utc(cls, v):
+        return ensure_utc_datetime(v)
 
 class UrlResult(BaseModel):
     result: Optional[ProductInfo]

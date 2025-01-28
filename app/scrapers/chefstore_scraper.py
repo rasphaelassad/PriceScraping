@@ -2,6 +2,7 @@ from parsel import Selector
 from .base_scraper import BaseScraper, logger
 from typing import Dict
 import json
+from datetime import datetime, timezone
 
 class ChefStoreScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
@@ -59,7 +60,8 @@ class ChefStoreScraper(BaseScraper):
                 "store_address": store_address,
                 "sku": data.get("sku"),
                 "brand": data.get("brand", {}).get("name"),
-                "category": data.get("category")
+                "category": data.get("category"),
+                "timestamp": datetime.now(timezone.utc)
             }
             
             logger.info(f"Successfully extracted product info: {result}")
