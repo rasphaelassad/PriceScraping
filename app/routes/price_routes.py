@@ -106,7 +106,14 @@ async def get_raw_html(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
             
-        return await service.get_raw_content(request)
+        result = await service.get_raw_content(request)
+        
+        # For single URL requests, return just the content
+        if len(request.urls) == 1:
+            url_result = result.get(str(request.urls[0]), {})
+            return {"html": url_result.get("content")}
+            
+        return result
     except HTTPException:
         raise
     except Exception as e:

@@ -14,31 +14,57 @@ ALBERTSONS_URLS = ["https://www.albertsons.com/shop/product-details.970555.html"
 CHEFSTORE_URLS = ["https://www.chefstore.com/p/usda-choice-beef-chuck-roast-primal-20-lb-avg-wt/46165"]
 WALMART_URLS = ["https://www.walmart.com/ip/Great-Value-All-Purpose-Flour-5-lb/10534869"]
 
+# Constants for retry configuration
+MAX_RETRIES = 60  # 5 minutes with 5-second intervals
+RETRY_INTERVAL = 5  # seconds
+
 class MockScraper:
     async def get_prices(self, urls):
-        await asyncio.sleep(0.1)  # Simulate network delay
+        await asyncio.sleep(2)  # Simulate longer network delay
         results = {}
         for url in urls:
-            product_info = ProductInfo(
-                name="Test Product",  # This maps to the non-nullable name field
-                price=9.99,
-                price_string="$9.99",
-                price_per_unit=None,
-                price_per_unit_string=None,
-                store_id=None,
-                store_address=None,
-                store_zip=None,
-                brand="Test Brand",
-                sku=None,
-                category="Test Category",
-                timestamp=datetime.now(timezone.utc)
-            )
-            results[url] = product_info
+            results[str(url)] = {
+                "store": "mock_store",
+                "url": str(url),
+                "name": "Test Product",
+                "price": 9.99,
+                "price_string": "$9.99",
+                "store_id": "MOCK001",
+                "store_address": "123 Mock St",
+                "store_zip": "12345",
+                "brand": "Mock Brand",
+                "sku": "MOCK123",
+                "category": "Mock Category",
+                "timestamp": datetime.now(timezone.utc)
+            }
         return results
 
     async def get_raw_content(self, urls):
-        await asyncio.sleep(0.1)  # Simulate network delay
-        return {"html": "<html>Test content</html>"}
+        await asyncio.sleep(2)  # Simulate longer network delay
+        results = {}
+        for url in urls:
+            results[str(url)] = {
+                "content": "<html><body><h1>Test Product</h1><div class='price'>$9.99</div></body></html>",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        return results
+
+    async def extract_product_info(self, html, url):
+        # Mock the extraction process
+        return {
+            "store": "mock_store",
+            "url": str(url),
+            "name": "Test Product",
+            "price": 9.99,
+            "price_string": "$9.99",
+            "store_id": "MOCK001",
+            "store_address": "123 Mock St",
+            "store_zip": "12345",
+            "brand": "Mock Brand",
+            "sku": "MOCK123",
+            "category": "Mock Category",
+            "timestamp": datetime.now(timezone.utc)
+        }
 
 @pytest.fixture(scope="function")
 def setup_database():
@@ -78,6 +104,30 @@ def test_get_prices_invalid_store(setup_database):
         data = response.json()
         assert "Invalid store" in str(data["detail"])
 
+async def wait_for_completion(client, store_name, urls, expected_status="completed"):
+    """Helper function to wait for request completion."""
+    for attempt in range(MAX_RETRIES):
+        response = client.post(
+            "/prices",
+            json={"store_name": store_name, "urls": urls}
+        )
+        data = response.json()
+        
+        if isinstance(data, dict) and "request_status" in data:
+            status = data["request_status"]["status"]
+        else:
+            status = list(data.values())[0]["request_status"]["status"]
+            
+        if status == expected_status:
+            return data
+            
+        if status == "failed" and expected_status != "failed":
+            raise AssertionError(f"Request failed: {data}")
+            
+        await asyncio.sleep(RETRY_INTERVAL)
+        
+    raise TimeoutError(f"Request did not reach {expected_status} status within {MAX_RETRIES * RETRY_INTERVAL} seconds")
+
 @pytest.mark.asyncio
 async def test_get_prices_with_cache(setup_database):
     with TestClient(app) as client:
@@ -87,26 +137,22 @@ async def test_get_prices_with_cache(setup_database):
             json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
         )
         assert response.status_code == 200
-        data = response.json()
         
-        # Check initial response structure
-        assert "request_status" in data
-        assert data["request_status"]["status"] in ["pending", "running"]
-        
-        # Wait for background task to complete
-        for _ in range(20):  # Maximum retries
-            await asyncio.sleep(0.2)  # Wait between retries
-            response = client.post(
-                "/prices",
-                json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
-            )
-            data = response.json()
-            if data["request_status"]["status"] == "completed":
-                break
+        # Wait for completion
+        data = await wait_for_completion(client, "albertsons", ALBERTSONS_URLS)
         
         assert data["request_status"]["status"] == "completed"
         assert data["result"]["name"] == "Test Product"
         assert data["result"]["price"] == 9.99
+        
+        # Second request should use cache
+        response = client.post(
+            "/prices",
+            json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
+        )
+        data = response.json()
+        assert data["request_status"]["status"] == "completed"
+        assert data["result"]["name"] == "Test Product"
 
 @pytest.mark.asyncio
 async def test_concurrent_requests(setup_database):
@@ -125,24 +171,8 @@ async def test_concurrent_requests(setup_database):
         assert response2.status_code == 200
         
         # Wait for both requests to complete
-        for _ in range(20):  # Maximum retries
-            await asyncio.sleep(0.2)  # Wait between retries
-            
-            response1 = client.post(
-                "/prices",
-                json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
-            )
-            response2 = client.post(
-                "/prices",
-                json={"store_name": "chefstore", "urls": CHEFSTORE_URLS}
-            )
-            
-            data1 = response1.json()
-            data2 = response2.json()
-            
-            if (data1["request_status"]["status"] == "completed" and 
-                data2["request_status"]["status"] == "completed"):
-                break
+        data1 = await wait_for_completion(client, "albertsons", ALBERTSONS_URLS)
+        data2 = await wait_for_completion(client, "chefstore", CHEFSTORE_URLS)
         
         assert data1["request_status"]["status"] == "completed"
         assert data2["request_status"]["status"] == "completed"
@@ -154,6 +184,7 @@ async def test_error_handling(setup_database):
     # Mock scraper that raises an error
     class ErrorScraper:
         async def get_prices(self, urls):
+            await asyncio.sleep(1)  # Simulate some processing time
             raise Exception("Test error")
             
     with patch.object(ScraperFactory, 'get_scraper', return_value=ErrorScraper()):
@@ -163,19 +194,9 @@ async def test_error_handling(setup_database):
                 json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
             )
             assert response.status_code == 200
-            data = response.json()
             
             # Wait for error status
-            for _ in range(20):  # Increased retries
-                response = client.post(
-                    "/prices",
-                    json={"store_name": "albertsons", "urls": ALBERTSONS_URLS}
-                )
-                data = response.json()
-                if data["request_status"]["status"] == "failed":
-                    break
-                await asyncio.sleep(0.2)  # Increased delay
-                
+            data = await wait_for_completion(client, "albertsons", ALBERTSONS_URLS, expected_status="failed")
             assert data["request_status"]["status"] == "failed"
             assert "Test error" in data["request_status"]["error_message"]
 

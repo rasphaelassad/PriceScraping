@@ -378,18 +378,18 @@ class CacheManager:
                     db.add(product)
 
                 # Update product fields
+                product.name = product_info.get('name')
                 product.price = product_info.get('price')
-                product.currency = product_info.get('currency')
-                product.unit = product_info.get('unit')
-                product.timestamp = datetime.now(timezone.utc)
-                product.product_name = product_info.get('product_name')
-                product.product_id = product_info.get('product_id')
+                product.price_string = product_info.get('price_string')
+                product.price_per_unit = product_info.get('price_per_unit')
+                product.price_per_unit_string = product_info.get('price_per_unit_string')
+                product.store_id = product_info.get('store_id')
+                product.store_address = product_info.get('store_address')
+                product.store_zip = product_info.get('store_zip')
                 product.brand = product_info.get('brand')
+                product.sku = product_info.get('sku')
                 product.category = product_info.get('category')
-                product.description = product_info.get('description')
-                product.image_url = product_info.get('image_url')
-                product.availability = product_info.get('availability')
-                product.metadata = product_info.get('metadata')
+                product.timestamp = datetime.now(timezone.utc)
 
                 db.commit()
 
