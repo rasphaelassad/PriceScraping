@@ -1,88 +1,50 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Generator
+from contextlib import contextmanager
 import os
 import logging
-import sqlite3
+from app.schemas.request_schemas import ProductInfo
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Register adapters for SQLite to handle timezone-aware datetimes
-def adapt_datetime(dt):
-    """Convert datetime to UTC ISO format string"""
-    logger.debug(f"adapt_datetime input: {dt}, type: {type(dt)}")
-    if dt is None:
-        return None
-    try:
-        if isinstance(dt, bytes):
-            dt = dt.decode()
-        if isinstance(dt, str):
-            dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
-        if not isinstance(dt, datetime):
-            logger.error(f"Cannot convert {type(dt)} to datetime")
-            return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        dt = dt.astimezone(timezone.utc)
-        result = dt.isoformat()
-        logger.debug(f"adapt_datetime output: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"Error in adapt_datetime: {e}")
-        return None
+class TimeUtil:
+    """Utility class for handling timezone-aware datetime operations"""
+    @staticmethod
+    def ensure_utc(dt: Optional[datetime]) -> datetime:
+        """Ensure a datetime is UTC timezone-aware"""
+        if dt is None:
+            return datetime.now(timezone.utc)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
-def convert_datetime(val):
-    """Convert ISO format string to UTC datetime"""
-    logger.debug(f"convert_datetime input: {val}, type: {type(val)}")
-    if val is None:
-        return None
-    try:
-        if isinstance(val, bytes):
-            val = val.decode()
-        if isinstance(val, str):
-            dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            result = dt.astimezone(timezone.utc)
-            logger.debug(f"convert_datetime output: {result}, tzinfo: {result.tzinfo}")
-            return result
-        if isinstance(val, datetime):
-            if val.tzinfo is None:
-                val = val.replace(tzinfo=timezone.utc)
-            result = val.astimezone(timezone.utc)
-            logger.debug(f"convert_datetime output: {result}, tzinfo: {result.tzinfo}")
-            return result
-        logger.error(f"Cannot convert {type(val)} to datetime")
-        return None
-    except Exception as e:
-        logger.error(f"Error in convert_datetime: {e}")
-        return None
+    @staticmethod
+    def get_utc_now() -> datetime:
+        """Get current UTC datetime"""
+        return datetime.now(timezone.utc)
 
-sqlite3.register_adapter(datetime, adapt_datetime)
-sqlite3.register_converter("datetime", convert_datetime)
+    @staticmethod
+    def get_seconds_since(dt: datetime) -> float:
+        """Get seconds elapsed since given datetime"""
+        return (TimeUtil.get_utc_now() - TimeUtil.ensure_utc(dt)).total_seconds()
 
-# Create database directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
+class DatabaseConfig:
+    """Database configuration settings"""
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    DB_FILE = os.path.join(BASE_DIR, "price_scraper.db")
+    DEFAULT_URL = f"sqlite:///{DB_FILE}"
 
-# SQLite URL with timezone support
-SQLALCHEMY_DATABASE_URL = os.getenv('DATABASE_URL', "sqlite:///data/scraper.db?mode=rw&timezone=UTC")
+# Database URL configuration
+SQLALCHEMY_DATABASE_URL = os.getenv('DATABASE_URL', DatabaseConfig.DEFAULT_URL)
 
-# Create database engine with timezone support
-if SQLALCHEMY_DATABASE_URL.startswith('sqlite'):
-    # SQLite specific configuration
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        connect_args={
-            "check_same_thread": False,
-            "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
-        },
-        pool_pre_ping=True  # Enable foreign key support
-    )
-else:
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+# Create database engine with SQLite-specific configuration
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith('sqlite') else {}
+)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -90,121 +52,136 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create base class for models
 Base = declarative_base()
 
-def get_utc_now():
-    """Helper function to get current UTC time"""
-    return datetime.now(timezone.utc)
-
-def ensure_utc_datetime(dt):
-    """Helper function to ensure a datetime is timezone-aware UTC"""
-    if dt is None:
-        return get_utc_now()
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+@contextmanager
+def get_db() -> Generator[Session, None, None]:
+    """Context manager for database sessions with proper error handling"""
+    db = SessionLocal()
+    try:
+        yield db
+    except SQLAlchemyError as e:
+        logger.error(f"Database error occurred: {str(e)}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 class Product(Base):
-    __tablename__ = "product"
+    """Product model with improved type hints and documentation"""
+    __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
-    url = Column(String, index=True)
-    name = Column(String)
-    price = Column(Float)
-    price_string = Column(String)
-    price_per_unit = Column(Float)
-    price_per_unit_string = Column(String)
-    store_id = Column(String)
-    store_address = Column(String)
-    store_zip = Column(String)
-    brand = Column(String)
-    sku = Column(String)
-    category = Column(String)
-    timestamp = Column(DateTime(timezone=True), default=get_utc_now)
+    store = Column(String(255), index=True, nullable=False)
+    url = Column(String(1024), index=True, nullable=False)
+    name = Column(String(512), nullable=False)
+    price = Column(Float, nullable=True)
+    price_string = Column(String(64), nullable=True)
+    price_per_unit = Column(Float, nullable=True)
+    price_per_unit_string = Column(String(64), nullable=True)
+    store_id = Column(String(64), nullable=True)
+    store_address = Column(String(512), nullable=True)
+    store_zip = Column(String(16), nullable=True)
+    brand = Column(String(255), nullable=True)
+    sku = Column(String(64), nullable=True)
+    category = Column(String(255), nullable=True)
+    timestamp = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
 
     @classmethod
-    def from_product_info(cls, product_info):
-        """Create from ProductInfo model"""
-        logger.debug(f"Creating Product from ProductInfo - timestamp: {product_info.timestamp}, type: {type(product_info.timestamp)}")
-        timestamp = ensure_utc_datetime(product_info.timestamp)
-        logger.debug(f"Ensured UTC timestamp: {timestamp}, tzinfo: {timestamp.tzinfo}")
-        
-        return cls(
-            store=product_info.store,
-            url=product_info.url,
-            name=product_info.name,
-            price=product_info.price,
-            price_string=product_info.price_string,
-            price_per_unit=product_info.price_per_unit,
-            price_per_unit_string=product_info.price_per_unit_string,
-            store_id=product_info.store_id,
-            store_address=product_info.store_address,
-            store_zip=product_info.store_zip,
-            brand=product_info.brand,
-            sku=product_info.sku,
-            category=product_info.category,
-            timestamp=timestamp
-        )
+    def from_product_info(cls, product_info: 'ProductInfo') -> 'Product':
+        """Create a Product instance from ProductInfo with proper error handling"""
+        try:
+            logger.debug(f"Creating Product from ProductInfo - timestamp: {product_info.timestamp}")
+            return cls(
+                store=product_info.store,
+                url=str(product_info.url),
+                name=product_info.name,
+                price=product_info.price,
+                price_string=product_info.price_string,
+                price_per_unit=product_info.price_per_unit,
+                price_per_unit_string=product_info.price_per_unit_string,
+                store_id=product_info.store_id,
+                store_address=product_info.store_address,
+                store_zip=product_info.store_zip,
+                brand=product_info.brand,
+                sku=product_info.sku,
+                category=product_info.category,
+                timestamp=TimeUtil.ensure_utc(product_info.timestamp)
+            )
+        except Exception as e:
+            logger.error(f"Error creating Product from ProductInfo: {str(e)}")
+            raise
 
-    def to_product_info(self):
-        """Convert to ProductInfo model"""
-        from app.schemas.request_schemas import ProductInfo
-        logger.debug(f"Converting Product to ProductInfo - timestamp: {self.timestamp}, type: {type(self.timestamp)}")
-        timestamp = ensure_utc_datetime(self.timestamp)
-        logger.debug(f"Ensured UTC timestamp: {timestamp}, tzinfo: {timestamp.tzinfo}")
-        
-        return ProductInfo(
-            store=self.store,
-            url=self.url,
-            name=self.name,
-            price=self.price,
-            price_string=self.price_string,
-            price_per_unit=self.price_per_unit,
-            price_per_unit_string=self.price_per_unit_string,
-            store_id=self.store_id,
-            store_address=self.store_address,
-            store_zip=self.store_zip,
-            brand=self.brand,
-            sku=self.sku,
-            category=self.category,
-            timestamp=timestamp
-        )
+    def to_product_info(self) -> 'ProductInfo':
+        """Convert to ProductInfo with proper error handling"""
+        try:
+            logger.debug(f"Converting Product to ProductInfo - timestamp: {self.timestamp}")
+            return ProductInfo(
+                store=self.store,
+                url=self.url,
+                name=self.name,
+                price=self.price,
+                price_string=self.price_string,
+                price_per_unit=self.price_per_unit,
+                price_per_unit_string=self.price_per_unit_string,
+                store_id=self.store_id,
+                store_address=self.store_address,
+                store_zip=self.store_zip,
+                brand=self.brand,
+                sku=self.sku,
+                category=self.category,
+                timestamp=TimeUtil.ensure_utc(self.timestamp)
+            )
+        except Exception as e:
+            logger.error(f"Error converting Product to ProductInfo: {str(e)}")
+            raise
 
 class RequestCache(Base):
+    """Request cache model with improved type hints and documentation"""
     __tablename__ = "request_cache"
 
     id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
-    url = Column(String, index=True)
-    job_id = Column(String, index=True)
-    status = Column(String, index=True)  # 'pending', 'completed', 'failed', 'timeout'
-    start_time = Column(DateTime(timezone=True), default=get_utc_now)
-    update_time = Column(DateTime(timezone=True), default=get_utc_now)
-    price_found = Column(Boolean, default=False)
-    error_message = Column(String, nullable=True)
+    store = Column(String(255), index=True, nullable=False)
+    url = Column(String(1024), index=True, nullable=False)
+    job_id = Column(String(128), index=True, nullable=False)
+    status = Column(String(32), index=True, nullable=False)  # 'pending', 'completed', 'failed', 'timeout'
+    start_time = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
+    update_time = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
+    price_found = Column(Boolean, default=False, nullable=False)
+    error_message = Column(String(1024), nullable=True)
+
+    ACTIVE_THRESHOLD = 600  # 10 minutes in seconds
+    STALE_THRESHOLD = 86400  # 24 hours in seconds
 
     @property
     def is_active(self) -> bool:
         """Check if the request is still active (less than 10 minutes old)"""
         if self.status in ['completed', 'failed', 'timeout']:
             return False
-        now = datetime.now(timezone.utc)
-        logger.debug(f"Checking is_active - now: {now}, start_time: {self.start_time}, tzinfo: {self.start_time.tzinfo}")
-        return (now - self.start_time).total_seconds() < 600  # 10 minutes
+        return TimeUtil.get_seconds_since(self.start_time) < self.ACTIVE_THRESHOLD
 
     @property
     def is_stale(self) -> bool:
         """Check if the request is stale (older than 24 hours)"""
-        now = datetime.now(timezone.utc)
-        logger.debug(f"Checking is_stale - now: {now}, update_time: {self.update_time}, tzinfo: {self.update_time.tzinfo}")
-        return (now - self.update_time).total_seconds() > 86400  # 24 hours
+        return TimeUtil.get_seconds_since(self.update_time) > self.STALE_THRESHOLD
 
 class PendingRequest(Base):
+    """Pending request model with improved type hints and documentation"""
     __tablename__ = "pending_request"
 
     id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
-    url = Column(String, unique=True, index=True)
-    timestamp = Column(DateTime(timezone=True), default=get_utc_now)
+    store = Column(String(255), index=True, nullable=False)
+    url = Column(String(1024), unique=True, index=True, nullable=False)
+    timestamp = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
 
-# Create all tables
-Base.metadata.create_all(bind=engine) 
+# Initialize database and create tables
+def init_db():
+    """Initialize database and create all tables"""
+    try:
+        # Create all tables
+        Base.metadata.create_all(bind=engine)
+        logger.info("Successfully created all database tables")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {str(e)}")
+        raise
+
+# Initialize database on module import
+init_db() 

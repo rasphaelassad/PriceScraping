@@ -50,6 +50,7 @@ class ChefStoreScraper(BaseScraper):
                     elif "price" in data["offers"]:
                         price = data["offers"]["price"]
             
+            now = datetime.now(timezone.utc)
             result = {
                 "store": "chefstore",
                 "url": url,
@@ -61,7 +62,7 @@ class ChefStoreScraper(BaseScraper):
                 "sku": data.get("sku"),
                 "brand": data.get("brand", {}).get("name"),
                 "category": data.get("category"),
-                "timestamp": datetime.now(timezone.utc)
+                "timestamp": now
             }
             
             logger.info(f"Successfully extracted product info: {result}")
