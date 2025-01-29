@@ -134,50 +134,80 @@ class CacheManager:
         now = datetime.now(timezone.utc)
         job_id = f"{store}_{int(now.timestamp())}_{url[-8:]}"
 
-        # Create and save new cache entry
-        cache_entry = RequestCache(
-            store=store,
-            url=str(url),
-            job_id=job_id,
-            status='pending',
-            start_time=now,
-            update_time=now,
-            price_found=False,
-            error_message=None
-        )
-        
-        try:
-            with get_db() as db:
-                db.add(cache_entry)
-                db.commit()
-        except IntegrityError:
-            db.rollback()
-            # If we hit a unique constraint violation, get the existing request
+        # First try to get existing request
+        with get_db() as db:
             existing_request = self._get_latest_request(str(url), store, db)
-            if existing_request:
+            if existing_request and existing_request.status in ['pending', 'running']:
+                # Ensure start_time is timezone-aware
+                start_time = existing_request.start_time
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                
+                # Return existing request status
+                elapsed_time = (now - start_time).total_seconds()
                 return RequestStatus(
                     status=existing_request.status,
                     job_id=existing_request.job_id,
-                    start_time=existing_request.start_time,
-                    elapsed_time_seconds=0,
-                    remaining_time_seconds=self.settings.request_timeout_minutes * 60,
+                    start_time=start_time,
+                    elapsed_time_seconds=elapsed_time,
+                    remaining_time_seconds=max(0, self.settings.request_timeout_minutes * 60 - elapsed_time),
                     price_found=existing_request.price_found,
                     error_message=existing_request.error_message,
-                    details="Request already exists"
+                    details="Using existing request"
                 )
-            raise
 
-        # Return initial status
-        return RequestStatus(
-            status='running',
-            job_id=job_id,
-            start_time=now,
-            elapsed_time_seconds=0,
-            remaining_time_seconds=self.settings.request_timeout_minutes * 60,
-            price_found=None,
-            error_message=None,
-            details="Request just started"
-        )
+            # Create and save new cache entry
+            cache_entry = RequestCache(
+                store=store,
+                url=str(url),
+                job_id=job_id,
+                status='pending',
+                start_time=now,
+                update_time=now,
+                price_found=False,
+                error_message=None
+            )
+            
+            try:
+                db.add(cache_entry)
+                db.commit()
+            except IntegrityError:
+                # If we hit a unique constraint violation, get the existing request
+                db.rollback()
+                existing_request = self._get_latest_request(str(url), store, db)
+                if existing_request:
+                    # Ensure start_time is timezone-aware
+                    start_time = existing_request.start_time
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    
+                    elapsed_time = (now - start_time).total_seconds()
+                    return RequestStatus(
+                        status=existing_request.status,
+                        job_id=existing_request.job_id,
+                        start_time=start_time,
+                        elapsed_time_seconds=elapsed_time,
+                        remaining_time_seconds=max(0, self.settings.request_timeout_minutes * 60 - elapsed_time),
+                        price_found=existing_request.price_found,
+                        error_message=existing_request.error_message,
+                        details="Using existing request after conflict"
+                    )
+                else:
+                    # This should never happen, but just in case
+                    logger.error("Failed to find existing request after IntegrityError")
+                    raise
+
+            # Return initial status
+            return RequestStatus(
+                status='pending',
+                job_id=job_id,
+                start_time=now,
+                elapsed_time_seconds=0,
+                remaining_time_seconds=self.settings.request_timeout_minutes * 60,
+                price_found=None,
+                error_message=None,
+                details="Request created"
+            )
 
     def update_request_status(self, url: str, store: str, status: str, error_message: Optional[str] = None):
         """Update the status of a request."""
@@ -268,17 +298,30 @@ class CacheManager:
                 logger.error(f"Failed to update request status after error: {str(status_error)}")
                 logger.error(f"Status update traceback: {traceback.format_exc()}")
 
-    def cleanup_stale_entries(self):
-        """Clean up stale cache entries."""
+    def cleanup_stale_entries(self) -> None:
+        """Remove stale entries from the cache."""
         try:
             with get_db() as db:
-                cleanup_time = datetime.now(timezone.utc) - timedelta(hours=self.settings.cache_ttl_hours)
-                db.query(RequestCache).filter(RequestCache.update_time < cleanup_time).delete()
+                timeout = datetime.now(timezone.utc) - timedelta(minutes=self.settings.request_timeout_minutes)
+                
+                # Update stale running/pending requests to failed
+                stale_requests = (
+                    db.query(RequestCache)
+                    .filter(RequestCache.start_time < timeout)
+                    .filter(RequestCache.status.in_(['pending', 'running']))
+                    .all()
+                )
+
+                for request in stale_requests:
+                    request.status = 'failed'
+                    request.error_message = 'Request timed out'
+                    request.details = None
+
                 db.commit()
+
         except Exception as e:
             logger.error(f"Error cleaning up stale entries: {e}")
-            with get_db() as db:
-                db.rollback()
+            db.rollback()
             raise
 
     def _get_status_details(self, status: str, elapsed_time: float) -> str:
@@ -299,4 +342,85 @@ class CacheManager:
             .filter(RequestCache.url == url, RequestCache.store == store)
             .order_by(RequestCache.update_time.desc())
             .first()
-        ) 
+        )
+
+    def update_cache_with_result(self, url: str, store: str, product_info: dict) -> None:
+        """Update cache with successful result."""
+        try:
+            with get_db() as db:
+                # Update request cache
+                request = (
+                    db.query(RequestCache)
+                    .filter(RequestCache.url == url)
+                    .filter(RequestCache.store == store)
+                    .first()
+                )
+
+                if not request:
+                    request = RequestCache(url=url, store=store)
+                    db.add(request)
+
+                request.status = 'completed'
+                request.price_found = True
+                request.error_message = None
+                request.details = None
+
+                # Update product cache
+                product = (
+                    db.query(Product)
+                    .filter(Product.url == url)
+                    .filter(Product.store == store)
+                    .first()
+                )
+
+                if not product:
+                    product = Product(url=url, store=store)
+                    db.add(product)
+
+                # Update product fields
+                product.price = product_info.get('price')
+                product.currency = product_info.get('currency')
+                product.unit = product_info.get('unit')
+                product.timestamp = datetime.now(timezone.utc)
+                product.product_name = product_info.get('product_name')
+                product.product_id = product_info.get('product_id')
+                product.brand = product_info.get('brand')
+                product.category = product_info.get('category')
+                product.description = product_info.get('description')
+                product.image_url = product_info.get('image_url')
+                product.availability = product_info.get('availability')
+                product.metadata = product_info.get('metadata')
+
+                db.commit()
+
+        except Exception as e:
+            logger.error(f"Error updating cache with result: {e}")
+            db.rollback()
+            raise
+
+    def update_cache_with_error(self, url: str, store: str, error_message: str) -> None:
+        """Update cache with error result."""
+        try:
+            with get_db() as db:
+                request = (
+                    db.query(RequestCache)
+                    .filter(RequestCache.url == url)
+                    .filter(RequestCache.store == store)
+                    .first()
+                )
+
+                if not request:
+                    request = RequestCache(url=url, store=store)
+                    db.add(request)
+
+                request.status = 'failed'
+                request.price_found = False
+                request.error_message = error_message
+                request.details = None
+
+                db.commit()
+
+        except Exception as e:
+            logger.error(f"Error updating cache with error: {e}")
+            db.rollback()
+            raise 
