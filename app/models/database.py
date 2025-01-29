@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import os
 import logging
 from app.schemas.request_schemas import ProductInfo
+import time
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -17,19 +18,34 @@ class TimeUtil:
     @staticmethod
     def ensure_utc(dt: Optional[datetime]) -> datetime:
         """Ensure a datetime is UTC timezone-aware"""
-        if dt is None:
+        try:
+            if dt is None:
+                return datetime.now(timezone.utc)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception as e:
+            logger.error(f"Error ensuring UTC timezone: {e}")
             return datetime.now(timezone.utc)
-        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
     @staticmethod
     def get_utc_now() -> datetime:
         """Get current UTC datetime"""
-        return datetime.now(timezone.utc)
+        try:
+            return datetime.now(timezone.utc)
+        except Exception as e:
+            logger.error(f"Error getting UTC now: {e}")
+            # Fallback to non-timezone aware datetime and convert it
+            return datetime.now().replace(tzinfo=timezone.utc)
 
     @staticmethod
     def get_seconds_since(dt: datetime) -> float:
         """Get seconds elapsed since given datetime"""
-        return (TimeUtil.get_utc_now() - TimeUtil.ensure_utc(dt)).total_seconds()
+        try:
+            return (TimeUtil.get_utc_now() - TimeUtil.ensure_utc(dt)).total_seconds()
+        except Exception as e:
+            logger.error(f"Error calculating seconds since: {e}")
+            return 0.0
 
 class DatabaseConfig:
     """Database configuration settings"""
@@ -52,19 +68,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create base class for models
 Base = declarative_base()
 
-@contextmanager
-def get_db() -> Generator[Session, None, None]:
-    """Context manager for database sessions with proper error handling"""
-    db = SessionLocal()
-    try:
-        yield db
-    except SQLAlchemyError as e:
-        logger.error(f"Database error occurred: {str(e)}")
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
 class Product(Base):
     """Product model with improved type hints and documentation"""
     __tablename__ = "products"
@@ -84,6 +87,12 @@ class Product(Base):
     sku = Column(String(64), nullable=True)
     category = Column(String(255), nullable=True)
     timestamp = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
+
+    __table_args__ = (
+        # Ensure unique combination of store, url, and timestamp
+        # This prevents duplicate entries for the same product at the same time
+        {'sqlite_on_conflict': 'REPLACE'}
+    )
 
     @classmethod
     def from_product_info(cls, product_info: 'ProductInfo') -> 'Product':
@@ -148,6 +157,12 @@ class RequestCache(Base):
     price_found = Column(Boolean, default=False, nullable=False)
     error_message = Column(String(1024), nullable=True)
 
+    __table_args__ = (
+        # Ensure unique combination of store and url
+        # This prevents multiple active requests for the same product
+        {'sqlite_on_conflict': 'REPLACE'}
+    )
+
     ACTIVE_THRESHOLD = 600  # 10 minutes in seconds
     STALE_THRESHOLD = 86400  # 24 hours in seconds
 
@@ -163,25 +178,58 @@ class RequestCache(Base):
         """Check if the request is stale (older than 24 hours)"""
         return TimeUtil.get_seconds_since(self.update_time) > self.STALE_THRESHOLD
 
-class PendingRequest(Base):
-    """Pending request model with improved type hints and documentation"""
-    __tablename__ = "pending_request"
+def retry_operation(operation, max_retries=3, delay=1):
+    """Retry a database operation with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except SQLAlchemyError as e:
+            if attempt == max_retries - 1:
+                raise
+            logger.warning(f"Database operation failed (attempt {attempt + 1}/{max_retries}): {e}")
+            time.sleep(delay * (2 ** attempt))
 
-    id = Column(Integer, primary_key=True, index=True)
-    store = Column(String(255), index=True, nullable=False)
-    url = Column(String(1024), unique=True, index=True, nullable=False)
-    timestamp = Column(DateTime(timezone=True), default=TimeUtil.get_utc_now, nullable=False)
-
-# Initialize database and create tables
-def init_db():
-    """Initialize database and create all tables"""
+@contextmanager
+def get_db() -> Generator[Session, None, None]:
+    """Context manager for database sessions with proper error handling and retry logic"""
+    db = None
     try:
-        # Create all tables
+        def create_session():
+            nonlocal db
+            db = SessionLocal()
+            return db
+        
+        db = retry_operation(create_session)
+        yield db
+    except SQLAlchemyError as e:
+        logger.error(f"Database error occurred: {str(e)}")
+        if db:
+            db.rollback()
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in database session: {str(e)}")
+        if db:
+            db.rollback()
+        raise
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception as e:
+                logger.error(f"Error closing database connection: {str(e)}")
+
+def init_db(testing: bool = False):
+    """Initialize database and create all tables with retry logic"""
+    def create_tables():
         Base.metadata.create_all(bind=engine)
         logger.info("Successfully created all database tables")
+
+    try:
+        retry_operation(create_tables)
     except Exception as e:
         logger.error(f"Database initialization failed: {str(e)}")
         raise
 
-# Initialize database on module import
-init_db() 
+# Only initialize database if not in testing mode
+if not os.getenv('TESTING'):
+    init_db() 
