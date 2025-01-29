@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create_engine
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create_engine, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -90,8 +90,7 @@ class Product(Base):
 
     __table_args__ = (
         # Ensure unique combination of store, url, and timestamp
-        # This prevents duplicate entries for the same product at the same time
-        {'sqlite_on_conflict': 'REPLACE'}
+        UniqueConstraint('store', 'url', 'timestamp', name='uix_store_url_timestamp'),
     )
 
     @classmethod
@@ -159,8 +158,7 @@ class RequestCache(Base):
 
     __table_args__ = (
         # Ensure unique combination of store and url
-        # This prevents multiple active requests for the same product
-        {'sqlite_on_conflict': 'REPLACE'}
+        UniqueConstraint('store', 'url', name='uix_store_url'),
     )
 
     ACTIVE_THRESHOLD = 600  # 10 minutes in seconds

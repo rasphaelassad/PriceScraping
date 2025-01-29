@@ -46,7 +46,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(price_routes.router, tags=["prices"])
-app.include_router(admin_routes.router, tags=["admin"])
+app.include_router(admin_routes.router, prefix="/admin", tags=["admin"])
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

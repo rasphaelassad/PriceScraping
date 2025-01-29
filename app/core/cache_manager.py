@@ -3,16 +3,18 @@ from sqlalchemy.orm import Session
 from app.models.database import Product, RequestCache, get_db
 from app.schemas.request_schemas import ProductInfo, RequestStatus
 from app.core.config import get_settings
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict, Any, List
 import logging
 import time
 import traceback
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
 class CacheManager:
     def __init__(self):
         self.settings = get_settings()
+        self.CACHE_DURATION = timedelta(hours=24)
 
     def get_cached_product(self, url: str, store: str) -> Tuple[Optional[ProductInfo], Optional[RequestStatus]]:
         """Get cached product and its status if available."""
@@ -148,10 +150,21 @@ class CacheManager:
             with get_db() as db:
                 db.add(cache_entry)
                 db.commit()
-        except Exception as e:
-            logger.error(f"Error creating cache entry: {e}")
-            with get_db() as db:
-                db.rollback()
+        except IntegrityError:
+            db.rollback()
+            # If we hit a unique constraint violation, get the existing request
+            existing_request = self._get_latest_request(str(url), store, db)
+            if existing_request:
+                return RequestStatus(
+                    status=existing_request.status,
+                    job_id=existing_request.job_id,
+                    start_time=existing_request.start_time,
+                    elapsed_time_seconds=0,
+                    remaining_time_seconds=self.settings.request_timeout_minutes * 60,
+                    price_found=existing_request.price_found,
+                    error_message=existing_request.error_message,
+                    details="Request already exists"
+                )
             raise
 
         # Return initial status
@@ -277,4 +290,13 @@ class CacheManager:
             return f"Request running for {elapsed_time:.1f} seconds, {remaining:.1f} seconds remaining"
         elif status in ['failed', 'timeout']:
             return f"Request {status} after {elapsed_time:.1f} seconds"
-        return f"Unknown status: {status}" 
+        return f"Unknown status: {status}"
+
+    def _get_latest_request(self, url: str, store: str, db: Session) -> Optional[RequestCache]:
+        """Get the latest request for a URL."""
+        return (
+            db.query(RequestCache)
+            .filter(RequestCache.url == url, RequestCache.store == store)
+            .order_by(RequestCache.update_time.desc())
+            .first()
+        ) 

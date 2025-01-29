@@ -1,5 +1,5 @@
 from pydantic import BaseModel, HttpUrl, field_validator
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, ClassVar, Set
 from datetime import datetime, timezone
 import logging
 
@@ -187,7 +187,7 @@ class ProductInfo(BaseModel):
         return ensure_utc_datetime(v)
 
 class RequestStatus(BaseModel):
-    VALID_STATUSES = {'completed', 'running', 'failed', 'timeout', 'pending'}
+    VALID_STATUSES: ClassVar[Set[str]] = {'completed', 'running', 'failed', 'timeout', 'pending'}
     
     status: str
     job_id: Optional[str] = None
