@@ -4,11 +4,12 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import Optional, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 import os
 import logging
 from app.schemas.request_schemas import ProductInfo
 import time
+from app.core.config import get_settings
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -53,14 +54,17 @@ class DatabaseConfig:
     DB_FILE = os.path.join(BASE_DIR, "price_scraper.db")
     DEFAULT_URL = f"sqlite:///{DB_FILE}"
 
-# Database URL configuration
-SQLALCHEMY_DATABASE_URL = os.getenv('DATABASE_URL', DatabaseConfig.DEFAULT_URL)
+settings = get_settings()
 
-# Create database engine with SQLite-specific configuration
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith('sqlite') else {}
-)
+# Use in-memory SQLite for testing
+if os.getenv('TESTING'):
+    SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+else:
+    SQLALCHEMY_DATABASE_URL = settings.database_url
+
+# Create engine with proper settings for SQLite
+connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -188,45 +192,26 @@ def retry_operation(operation, max_retries=3, delay=1):
             time.sleep(delay * (2 ** attempt))
 
 @contextmanager
-def get_db() -> Generator[Session, None, None]:
-    """Context manager for database sessions with proper error handling and retry logic"""
-    db = None
+def get_db() -> Session:
+    """Synchronous database session context manager."""
+    db = SessionLocal()
     try:
-        def create_session():
-            nonlocal db
-            db = SessionLocal()
-            return db
-        
-        db = retry_operation(create_session)
         yield db
-    except SQLAlchemyError as e:
-        logger.error(f"Database error occurred: {str(e)}")
-        if db:
-            db.rollback()
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in database session: {str(e)}")
-        if db:
-            db.rollback()
-        raise
     finally:
-        if db:
-            try:
-                db.close()
-            except Exception as e:
-                logger.error(f"Error closing database connection: {str(e)}")
+        db.close()
 
-def init_db(testing: bool = False):
-    """Initialize database and create all tables with retry logic"""
-    def create_tables():
-        Base.metadata.create_all(bind=engine)
-        logger.info("Successfully created all database tables")
-
+@asynccontextmanager
+async def get_async_db():
+    """Asynchronous database session context manager."""
+    db = SessionLocal()
     try:
-        retry_operation(create_tables)
-    except Exception as e:
-        logger.error(f"Database initialization failed: {str(e)}")
-        raise
+        yield db
+    finally:
+        db.close()
+
+def init_db():
+    """Initialize database tables."""
+    Base.metadata.create_all(bind=engine)
 
 # Only initialize database if not in testing mode
 if not os.getenv('TESTING'):

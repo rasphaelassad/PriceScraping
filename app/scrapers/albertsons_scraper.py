@@ -4,6 +4,11 @@ import logging
 import traceback
 from datetime import datetime, timezone
 from .base_scraper import BaseScraper
+import asyncio
+from fastapi import HTTPException
+import aiohttp
+from app.core.config import get_settings
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +18,9 @@ class AlbertsonsScraper(BaseScraper):
     def __init__(self):
         """Initialize the scraper in async mode."""
         super().__init__(mode="async")  # Use async parallel mode instead of batch
-        logger.info("Initialized AlbertsonsScraper in async mode")
+        settings = get_settings()
+        self.api_key = settings.scraper_api_key
+        self.store_name = "albertsons"
     
     def get_scraper_config(self) -> Dict[str, Any]:
         """Return scraper configuration for Albertsons."""
@@ -28,17 +35,17 @@ class AlbertsonsScraper(BaseScraper):
             "keepHeaders": True
         }
 
+    def transform_url(self, url: str) -> str:
+        """Transform product detail URL to API URL for scraping."""
+        if "product-details." in url:
+            # Extract product ID from URL
+            product_id = url.split("product-details.")[-1].split(".")[0]
+            # Transform to API URL format with updated parameters
+            return f"https://www.albertsons.com/abs/pub/xapi/v1/sku/{product_id}?banner=albertsons&storeId=177&source=pdp"
+        return url
+
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict[str, Any]]:
-        """
-        Extract product information from Albertsons API response.
-        
-        Args:
-            html: The JSON response content to extract information from.
-            url: The URL the content was fetched from.
-            
-        Returns:
-            A dictionary containing product information, or None if extraction failed.
-        """
+        """Extract product information from Albertsons API response."""
         try:
             # Parse the JSON response
             try:
@@ -144,7 +151,7 @@ class AlbertsonsScraper(BaseScraper):
             # Build the standardized product information
             product_info = {
                 "store": "albertsons",
-                "url": f"https://www.albertsons.com/shop/product-details.{product_id}.html",
+                "url": url,
                 "name": name,
                 "price": price,
                 "price_string": price_string,
@@ -162,47 +169,54 @@ class AlbertsonsScraper(BaseScraper):
             logger.info(f"Successfully extracted product info: {product_info}")
             return product_info
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(traceback.format_exc())
-            return None
         except Exception as e:
             logger.error(f"Error extracting product info: {e}")
             logger.error(traceback.format_exc())
             return None
 
-    def transform_url(self, url) -> str:
-        """Transform product detail URL to API URL"""
-        # Convert Pydantic Url to string
-        url = str(url)
+    async def get_price(self, url: str) -> Dict[str, Any]:
+        """Get price for a single URL, using API URL for fetching but original URL in results."""
+        original_url = url
+        api_url = self.transform_url(url)
         
-        if "product-details." in url:
-            # Extract product ID from URL
-            product_id = url.split("product-details.")[-1].split(".")[0]
-            # Transform to API URL format
-            return f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId=177"
-        return url
-
-    async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
-        """Override to transform URLs before processing"""
-        # Store original URLs
-        original_urls = [str(url) for url in urls]
-        
-        # Transform URLs to API format
-        api_urls = [self.transform_url(url) for url in urls]
-        
-        # Call parent implementation with transformed URLs
-        results = await super().get_prices(api_urls)
-        
-        # Map results back to original URLs
-        original_results = {}
-        for orig_url, api_url in zip(original_urls, api_urls):
-            if api_url in results and results[api_url]:
-                # Ensure the result uses the original product URL
-                result = results[api_url].copy()
-                result['url'] = orig_url
-                original_results[orig_url] = result
-            else:
-                original_results[orig_url] = None
-                
-        return original_results
+        try:
+            raw_result = await self._fetch_url(api_url)
+            product_info = await self.extract_product_info(raw_result["content"], original_url)
+            
+            if not product_info:
+                return {
+                    "request_status": {
+                        "status": "failed",
+                        "error_message": "Failed to extract product information",
+                        "start_time": raw_result["start_time"],
+                        "elapsed_time_seconds": (datetime.now(timezone.utc) - raw_result["start_time"]).total_seconds(),
+                        "job_id": raw_result.get("job_id") or str(uuid.uuid4()),
+                        "scraper_job_id": raw_result.get("scraper_job_id"),
+                        "scraper_status_url": raw_result.get("scraper_status_url")
+                    }
+                }
+            
+            return {
+                "request_status": {
+                    "status": "completed",
+                    "start_time": raw_result["start_time"],
+                    "elapsed_time_seconds": (datetime.now(timezone.utc) - raw_result["start_time"]).total_seconds(),
+                    "job_id": raw_result.get("job_id") or str(uuid.uuid4()),
+                    "scraper_job_id": raw_result.get("scraper_job_id"),
+                    "scraper_status_url": raw_result.get("scraper_status_url"),
+                    "price_found": True
+                },
+                "result": product_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting price for URL {url}: {e}")
+            return {
+                "request_status": {
+                    "status": "failed",
+                    "error_message": str(e),
+                    "start_time": datetime.now(timezone.utc),
+                    "elapsed_time_seconds": 0.0,
+                    "job_id": str(uuid.uuid4())
+                }
+            }

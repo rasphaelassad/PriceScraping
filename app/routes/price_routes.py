@@ -6,8 +6,10 @@ from app.services.price_service import PriceService
 from app.core.scraper_factory import ScraperFactory
 import logging
 import traceback
-from typing import Dict, List
+from typing import Dict, List, Any
 from pydantic import HttpUrl
+import uuid
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -22,83 +24,52 @@ def get_supported_stores():
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/prices")
 @router.post("/prices")
-async def get_prices(
-    request: PriceRequest = None,
-    store: str = None,
-    url: HttpUrl = None,
-    db: Session = Depends(get_db)
-):
+async def get_prices(request: PriceRequest) -> Dict[str, Any]:
     """Get prices for the requested URLs."""
     try:
         service = PriceService()
+        result = await service.get_prices(request)
         
-        # Handle both GET and POST requests
-        if request is None and store is not None and url is not None:
-            # GET request
-            request = PriceRequest(store_name=store, urls=[url])
-        elif request is None:
-            raise HTTPException(status_code=400, detail="Missing required parameters")
-        
-        # Validate store name before proceeding
-        store_name = request.store_name.lower()
-        if store_name not in ScraperFactory.get_supported_stores():
-            raise HTTPException(status_code=400, detail=f"Invalid store: {store_name}")
-            
-        results = await service.get_prices(request)
-        
-        # For GET requests, return single URL result
-        if store is not None and url is not None:
-            result = results.get(str(url), {})
-            return {
-                "request_status": result.request_status,
-                "result": result.result
-            }
-            
-        # For POST requests, return all results
-        if len(request.urls) == 1:
-            # Single URL request
-            result = results.get(str(request.urls[0]), {})
-            return {
-                "request_status": result.request_status,
-                "result": result.result
-            }
-        else:
-            # Multiple URL request
-            return {
-                url: {
-                    "request_status": result.request_status,
-                    "result": result.result
+        # Ensure each URL result has the correct structure
+        formatted_result = {}
+        for url, data in result.items():
+            if isinstance(data, dict) and "request_status" in data:
+                # Already in correct format
+                formatted_result[url] = data
+            else:
+                # Format the result to include request_status
+                formatted_result[url] = {
+                    "request_status": {
+                        "status": "completed" if data else "failed",
+                        "job_id": str(uuid.uuid4()),
+                        "start_time": datetime.now(timezone.utc),
+                        "elapsed_time_seconds": 0.0,
+                        "price_found": bool(data),
+                        "details": "Retrieved from cache" if data else "Failed to get price"
+                    },
+                    "result": data
                 }
-                for url, result in results.items()
-            }
         
-    except HTTPException:
-        raise
+        return formatted_result
+        
     except Exception as e:
         logger.error(f"Error processing price request: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/raw-scrape")
 @router.post("/raw-content")
-async def get_raw_html(
-    request: PriceRequest = None,
-    store: str = None,
-    url: HttpUrl = None,
+async def get_raw_content(
+    request: PriceRequest,
     db: Session = Depends(get_db)
 ):
-    """Get raw HTML/JSON response without processing."""
+    """
+    Get raw HTML/JSON response without processing.
+    
+    POST request with multiple URLs in request body
+    """
     try:
         service = PriceService()
-        
-        # Handle both GET and POST requests
-        if request is None and store is not None and url is not None:
-            # GET request
-            request = PriceRequest(store_name=store, urls=[url])
-        elif request is None:
-            raise HTTPException(status_code=400, detail="Missing required parameters")
             
         try:
             # Get scraper instance to validate store
@@ -119,9 +90,4 @@ async def get_raw_html(
     except Exception as e:
         logger.error(f"Error getting raw content: {e}")
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/health")
-def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"} 
+        raise HTTPException(status_code=500, detail=str(e)) 

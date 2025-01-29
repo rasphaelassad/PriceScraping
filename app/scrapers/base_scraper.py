@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone
 from app.core.config import get_settings
 from app.schemas.request_schemas import ensure_utc_datetime
+from fastapi import HTTPException
+import aiohttp
+import uuid
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,12 +23,12 @@ logger = logging.getLogger(__name__)
 class BaseScraper(ABC):
     """Base class for all store-specific scrapers."""
 
-    def __init__(self, mode: Literal["batch", "async"] = "batch"):
+    def __init__(self, mode: str = "batch_async"):
         """
         Initialize the scraper.
         
         Args:
-            mode: The scraping mode to use. Either "batch" or "async".
+            mode: Either "batch_async" for batch processing or "async" for individual concurrent requests
         """
         self.settings = get_settings()
         self.api_key = self.settings.scraper_api_key
@@ -33,6 +36,9 @@ class BaseScraper(ABC):
             logger.warning("SCRAPER_API_KEY not set. Using mock data for testing.")
         self.scraper_config = self.get_scraper_config()
         self.mode = mode
+        self.base_url = "http://api.scraperapi.com"
+        self.status_base_url = "https://api.scraperapi.com/status"
+        self.store_name = None
         logger.info(f"Initialized {self.__class__.__name__} in {mode} mode")
 
     @abstractmethod
@@ -59,356 +65,121 @@ class BaseScraper(ABC):
         """
         pass
 
-    async def get_raw_content(self, urls: List[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Get raw HTML/JSON content for URLs without processing.
-        
-        Args:
-            urls: List of URLs to fetch content for.
-            
-        Returns:
-            A dictionary mapping URLs to their content or error information.
-        """
-        if not urls:
-            logger.error("No URLs provided")
-            return {}
-
-        if not self.api_key:
-            # Return mock data for testing
-            logger.info("Using mock data (no API key)")
-            mock_time = datetime.now(timezone.utc)
-            return {url: {
-                "content": "<html><body><h1>Mock Data</h1></body></html>",
-                "timestamp": mock_time.isoformat()
-            } for url in urls}
-
-        url_strings = [str(url) for url in urls]
-        results = {}
-        
+    async def get_raw_content(self, urls: List[str]) -> Dict[str, Any]:
+        """Get raw content for URLs."""
         try:
-            async with httpx.AsyncClient(verify=False) as client:
-                if self.mode == "batch":
-                    results = await self._get_raw_batch(url_strings, client)
+            tasks = []
+            url_mapping = {}
+            
+            for url in urls:
+                api_url = self.transform_url(url)
+                url_mapping[api_url] = url
+                tasks.append(self._fetch_url(api_url))
+                
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            if len(urls) == 1:
+                result = results[0]
+                if isinstance(result, Exception):
+                    raise result
+                return {"html": result["content"]}
+            
+            response = {}
+            for api_url, result in zip(url_mapping.keys(), results):
+                original_url = url_mapping[api_url]
+                if isinstance(result, Exception):
+                    response[original_url] = {"error": str(result)}
                 else:
-                    tasks = [self._get_raw_single(url, client) for url in url_strings]
-                    task_results = await asyncio.gather(*tasks, return_exceptions=True)
-                    results = {}
-                    for url, result in zip(url_strings, task_results):
-                        if isinstance(result, Exception):
-                            logger.error(f"Error fetching {url}: {result}")
-                            results[url] = {
-                                "error": str(result),
-                                "timestamp": datetime.now(timezone.utc).isoformat()
-                            }
-                        else:
-                            results[url] = result
+                    response[original_url] = {"html": result["content"]}
+            return response
+            
         except Exception as e:
             logger.error(f"Error in get_raw_content: {e}")
-            logger.error(traceback.format_exc())
-            now = datetime.now(timezone.utc)
-            for url in url_strings:
-                results[url] = {
-                    "error": str(e),
-                    "timestamp": now.isoformat()
-                }
-        
-        return results
+            raise HTTPException(status_code=400, detail=str(e))
 
-    async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict[str, Any]:
-        """
-        Get raw content for a single URL.
-        
-        Args:
-            url: The URL to fetch content for.
-            client: The HTTP client to use.
-            
-        Returns:
-            A dictionary containing the content or error information.
-        """
+    async def _fetch_url(self, url: str) -> Dict[str, Any]:
+        """Fetch URL content with ScraperAPI using scraper configuration."""
+        config = self.get_scraper_config()
         try:
-            # Submit job to ScraperAPI
-            api_url = "https://async.scraperapi.com/jobs"
-            payload = {
-                "url": url,
-                "apiKey": self.api_key,
-                **self.scraper_config
-            }
-            
-            logger.debug(f"Submitting job for {url}")
-            response = await client.post(api_url, json=payload)
-            if response.status_code != 200:
-                now = datetime.now(timezone.utc)
-                error_msg = f"API request failed with status {response.status_code}"
-                logger.error(f"{error_msg} for {url}")
-                return {
-                    "error": error_msg,
-                    "timestamp": now.isoformat()
+            async with aiohttp.ClientSession() as session:
+                params = {
+                    'api_key': self.api_key,
+                    'url': url,
+                    'premium': 'true',
+                    'country': config.get('country', 'us'),
+                    'keep_headers': str(config.get('keepHeaders', True)).lower(),
+                    'render': str(self.store_name in self.get_javascript_required_stores()).lower()
                 }
-
-            job_data = response.json()
-            job_id = job_data.get('id')
-            status_url = job_data.get('statusUrl')
-
-            if not job_id or not status_url:
-                now = datetime.now(timezone.utc)
-                error_msg = "Invalid job response (missing id or statusUrl)"
-                logger.error(f"{error_msg} for {url}")
-                return {
-                    "error": error_msg,
-                    "timestamp": now.isoformat()
-                }
-
-            logger.debug(f"Job {job_id} submitted for {url}")
-
-            # Poll for job completion
-            start_time = time.time()
-            while True:
-                # Check timeout
-                elapsed_time = time.time() - start_time
-                if elapsed_time / 60 >= self.settings.request_timeout_minutes:
-                    now = datetime.now(timezone.utc)
-                    error_msg = f"Job timed out after {elapsed_time:.1f} seconds"
-                    logger.error(f"{error_msg} for {url}")
+                
+                headers = config.get('headers', {})
+                logger.info(f"Fetching URL with ScraperAPI: {url}")
+                
+                async with session.get(self.base_url, params=params, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"ScraperAPI error: {error_text}")
+                        raise HTTPException(status_code=response.status, detail=error_text)
+                    
+                    job_id = response.headers.get('X-ScraperAPI-JobId')
+                    status_url = f"{self.status_base_url}/{job_id}" if job_id else None
+                    
+                    content = await response.text()
+                    logger.debug(f"Received response content: {content[:200]}...")
+                    
                     return {
-                        "error": error_msg,
-                        "timestamp": now.isoformat()
+                        "content": content,
+                        "job_id": job_id,
+                        "scraper_status_url": status_url,
+                        "start_time": datetime.now(timezone.utc)
                     }
-
-                status_response = await client.get(status_url)
-                status_data = status_response.json()
-                status = status_data.get('status')
-
-                if status == 'failed':
-                    now = datetime.now(timezone.utc)
-                    error_msg = status_data.get('error', 'Job failed')
-                    logger.error(f"{error_msg} for {url}")
-                    return {
-                        "error": error_msg,
-                        "timestamp": now.isoformat()
-                    }
-                elif status == 'finished':
-                    html = status_data.get('response', {}).get('body')
-                    now = datetime.now(timezone.utc)
-                    if html:
-                        logger.debug(f"Job {job_id} completed for {url}")
-                        return {
-                            "content": html,
-                            "timestamp": now.isoformat()
-                        }
-                    else:
-                        error_msg = "No HTML content in response"
-                        logger.error(f"{error_msg} for {url}")
-                        return {
-                            "error": error_msg,
-                            "timestamp": now.isoformat()
-                        }
-
-                await asyncio.sleep(5)  # Wait before next poll
-
         except Exception as e:
-            now = datetime.now(timezone.utc)
-            logger.error(f"Error fetching {url}: {e}")
+            logger.error(f"Error fetching URL {url}: {str(e)}")
             logger.error(traceback.format_exc())
-            return {
-                "error": str(e),
-                "timestamp": now.isoformat()
-            }
+            raise
 
-    async def _get_raw_batch(self, urls: List[str], client: httpx.AsyncClient) -> Dict[str, Dict[str, Any]]:
-        """
-        Get raw content for multiple URLs in batch mode.
+    def get_javascript_required_stores(self) -> set:
+        """Return set of store names that require JavaScript rendering."""
+        return {'walmart', 'costco', 'chefstore'}
+
+    async def get_prices(self, urls: List[str]) -> Dict[str, Any]:
+        """Get prices for multiple URLs using the configured mode."""
+        if self.mode == "batch_async":
+            return await self._get_prices_batch(urls)
+        else:
+            return await self._get_prices_concurrent(urls)
+
+    async def _get_prices_batch(self, urls: List[str]) -> Dict[str, Any]:
+        """Get prices in batch mode. Override in subclass if batch mode is supported."""
+        raise NotImplementedError("Batch mode not implemented for this scraper")
+
+    async def _get_prices_concurrent(self, urls: List[str]) -> Dict[str, Any]:
+        """Get prices using concurrent individual requests."""
+        tasks = [self.get_price(url) for url in urls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        Args:
-            urls: List of URLs to fetch content for.
-            client: The HTTP client to use.
-            
-        Returns:
-            A dictionary mapping URLs to their content or error information.
-        """
-        try:
-            # Submit all jobs
-            job_statuses = {}
-            results = {}
-            now = datetime.now(timezone.utc)
-
-            for url in urls:
-                try:
-                    # Submit job to ScraperAPI
-                    api_url = "https://async.scraperapi.com/jobs"
-                    payload = {
-                        "url": url,
-                        "apiKey": self.api_key,
-                        **self.scraper_config
+        response = {}
+        for url, result in zip(urls, results):
+            if isinstance(result, Exception):
+                response[url] = {
+                    "request_status": {
+                        "status": "failed",
+                        "error_message": str(result),
+                        "start_time": datetime.now(timezone.utc),
+                        "elapsed_time_seconds": 0.0,
+                        "job_id": str(uuid.uuid4())
                     }
-                    
-                    response = await client.post(api_url, json=payload)
-                    if response.status_code != 200:
-                        results[url] = {
-                            "error": f"API request failed with status {response.status_code}",
-                            "timestamp": now.isoformat()
-                        }
-                        continue
+                }
+            else:
+                response[url] = result
+        return response
 
-                    job_data = response.json()
-                    job_id = job_data.get('id')
-                    status_url = job_data.get('statusUrl')
+    async def get_price(self, url: str) -> Dict[str, Any]:
+        """Get price for a single URL. Override in subclass."""
+        raise NotImplementedError("get_price not implemented for this scraper")
 
-                    if not job_id or not status_url:
-                        results[url] = {
-                            "error": "Invalid job response (missing id or statusUrl)",
-                            "timestamp": now.isoformat()
-                        }
-                        continue
-
-                    job_statuses[job_id] = {
-                        'url': url,
-                        'statusUrl': status_url,
-                        'status': 'running',
-                        'startTime': time.time()
-                    }
-                    logger.debug(f"Job {job_id} submitted for {url}")
-
-                except Exception as e:
-                    logger.error(f"Error submitting job for {url}: {e}")
-                    logger.error(traceback.format_exc())
-                    results[url] = {
-                        "error": str(e),
-                        "timestamp": now.isoformat()
-                    }
-
-            # Poll for job completion
-            while job_statuses:
-                # Check for timeouts
-                now = datetime.now(timezone.utc)
-                timed_out_jobs = []
-                for job_id, job_info in job_statuses.items():
-                    elapsed_time = time.time() - job_info['startTime']
-                    if elapsed_time / 60 >= self.settings.request_timeout_minutes:
-                        timed_out_jobs.append(job_id)
-                        results[job_info['url']] = {
-                            "error": f"Job timed out after {elapsed_time:.1f} seconds",
-                            "timestamp": now.isoformat()
-                        }
-
-                for job_id in timed_out_jobs:
-                    del job_statuses[job_id]
-
-                # Check status of running jobs
-                for job_id, job_info in list(job_statuses.items()):
-                    if job_info['status'] == 'running':
-                        try:
-                            status_response = await client.get(job_info['statusUrl'])
-                            status_data = status_response.json()
-                            current_status = status_data.get('status')
-                            
-                            if current_status == 'failed':
-                                job_info['status'] = 'failed'
-                                error_msg = status_data.get('error', 'Job failed')
-                                logger.error(f"{error_msg} for {job_info['url']}")
-                                results[job_info['url']] = {
-                                    "error": error_msg,
-                                    "timestamp": now.isoformat()
-                                }
-                                del job_statuses[job_id]
-                            elif current_status == 'finished':
-                                job_info['status'] = 'finished'
-                                html = status_data.get('response', {}).get('body')
-                                if html:
-                                    logger.debug(f"Job {job_id} completed for {job_info['url']}")
-                                    results[job_info['url']] = {
-                                        "content": html,
-                                        "timestamp": now.isoformat()
-                                    }
-                                else:
-                                    error_msg = "No HTML content in response"
-                                    logger.error(f"{error_msg} for {job_info['url']}")
-                                    results[job_info['url']] = {
-                                        "error": error_msg,
-                                        "timestamp": now.isoformat()
-                                    }
-                                del job_statuses[job_id]
-                        except Exception as e:
-                            logger.error(f"Error checking status for {job_info['url']}: {e}")
-                            logger.error(traceback.format_exc())
-                            results[job_info['url']] = {
-                                "error": str(e),
-                                "timestamp": now.isoformat()
-                            }
-                            del job_statuses[job_id]
-
-                if job_statuses:
-                    await asyncio.sleep(5)  # Wait before next poll
-
-            return results
-
-        except Exception as e:
-            logger.error(f"Error in batch processing: {e}")
-            logger.error(traceback.format_exc())
-            now = datetime.now(timezone.utc)
-            return {url: {
-                "error": str(e),
-                "timestamp": now.isoformat()
-            } for url in urls}
-
-    async def get_prices(self, urls: List[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Get prices for the given URLs.
-        
-        Args:
-            urls: List of URLs to get prices for.
-            
-        Returns:
-            A dictionary mapping URLs to their product information.
-        """
-        try:
-            if not self.api_key:
-                # Return mock data for testing
-                logger.info("Using mock data (no API key)")
-                mock_time = datetime.now(timezone.utc)
-                return {str(url): {
-                    "store": self.__class__.__name__.replace("Scraper", "").lower(),
-                    "url": str(url),
-                    "name": "Mock Product",
-                    "price": 9.99,
-                    "price_string": "$9.99",
-                    "store_id": "MOCK001",
-                    "store_address": "123 Mock St",
-                    "store_zip": "12345",
-                    "brand": "Mock Brand",
-                    "sku": "MOCK123",
-                    "category": "Mock Category",
-                    "timestamp": mock_time
-                } for url in urls}
-
-            raw_results = await self.get_raw_content(urls)
-            results = {}
-            
-            for url, raw_result in raw_results.items():
-                if "error" in raw_result:
-                    logger.error(f"Error getting content for {url}: {raw_result['error']}")
-                    continue
-                    
-                html = raw_result.get("content")
-                if not html:
-                    logger.error(f"No HTML content for {url}")
-                    continue
-                    
-                try:
-                    product_info = await self.extract_product_info(html, url)
-                    if product_info:
-                        results[url] = self.standardize_output(product_info)
-                    else:
-                        logger.warning(f"No product info extracted for {url}")
-                except Exception as e:
-                    logger.error(f"Error extracting product info for {url}: {e}")
-                    logger.error(traceback.format_exc())
-            
-            return results
-
-        except Exception as e:
-            logger.error(f"Error in get_prices: {e}")
-            logger.error(traceback.format_exc())
-            return {}
+    def transform_url(self, url: str) -> str:
+        """Transform product detail URL to API URL. Override in subclass."""
+        return url
 
     def standardize_output(self, product_info: Dict[str, Any]) -> Dict[str, Any]:
         """

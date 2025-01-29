@@ -74,7 +74,6 @@ def ensure_utc_datetime(dt):
 class PriceRequest(BaseModel):
     store_name: str
     urls: List[HttpUrl]
-    start_time: Optional[datetime] = None
 
     @field_validator('store_name')
     def validate_store_name(cls, v):
@@ -101,10 +100,6 @@ class PriceRequest(BaseModel):
             if len(url) > 1024:
                 raise ValueError(f"URL too long (max 1024 characters): {url[:50]}...")
         return v
-
-    @field_validator('start_time', mode='before')
-    def ensure_start_time_utc(cls, v):
-        return ensure_utc_datetime(v)
 
 class ProductInfo(BaseModel):
     store: str
@@ -197,6 +192,8 @@ class RequestStatus(BaseModel):
     price_found: Optional[bool] = False
     error_message: Optional[str] = None
     details: Optional[str] = None
+    scraper_job_id: Optional[str] = None  # ScraperAPI job ID
+    scraper_status_url: Optional[str] = None  # ScraperAPI status URL
 
     @field_validator('status')
     def validate_status(cls, v):

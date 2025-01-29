@@ -8,92 +8,56 @@ import logging
 import time
 import traceback
 from sqlalchemy.exc import IntegrityError
+import re
 
 logger = logging.getLogger(__name__)
 
 class CacheManager:
-    def __init__(self):
+    def __init__(self, db: Session):
+        self.db = db
         self.settings = get_settings()
         self.CACHE_DURATION = timedelta(hours=24)
+        self.logger = logging.getLogger(__name__)
 
-    def get_cached_product(self, url: str, store: str) -> Tuple[Optional[ProductInfo], Optional[RequestStatus]]:
-        """Get cached product and its status if available."""
-        logger.info(f"Attempting to get cached product for URL: {url}, Store: {store}")
+    async def get_cached_product(self, url: str, store_name: str) -> Optional[Dict[str, Any]]:
+        """Get cached product information if available."""
+        self.logger.info(f"Attempting to get cached product for URL: {url}, Store: {store_name}")
+        
         try:
-            with get_db() as db:
-                try:
-                    logger.debug("Querying request cache...")
-                    cache_entry = (
-                        db.query(RequestCache)
-                        .filter(RequestCache.url == str(url))
-                        .filter(RequestCache.store == store)
-                        .order_by(RequestCache.update_time.desc())
-                        .first()
-                    )
+            # Check request cache first
+            cache_entry = (
+                self.db.query(RequestCache)
+                .filter(RequestCache.url == url)
+                .filter(RequestCache.store == store_name)
+                .order_by(RequestCache.update_time.desc())
+                .first()
+            )
 
-                    if not cache_entry:
-                        logger.debug(f"No cache entry found for {url}")
-                        return None, None
+            if cache_entry:
+                self.logger.info(f"Found cache entry for URL: {url}")
+                if cache_entry.status in ["pending", "running"]:
+                    return None
 
-                    logger.debug(f"Found cache entry: status={cache_entry.status}, job_id={cache_entry.job_id}")
+            # Then check products table
+            self.logger.info(f"Attempting to get product from cache - URL: {url}, Store: {store_name}")
+            product = (
+                self.db.query(Product)
+                .filter(Product.url == url)
+                .filter(Product.store == store_name)
+                .order_by(Product.timestamp.desc())
+                .first()
+            )
 
-                    # Ensure all times are timezone-aware
-                    now = datetime.now(timezone.utc)
-                    start_time = cache_entry.start_time
-                    if start_time.tzinfo is None:
-                        start_time = start_time.replace(tzinfo=timezone.utc)
-                        logger.debug("Converted start_time to UTC")
-                    update_time = cache_entry.update_time
-                    if update_time.tzinfo is None:
-                        update_time = update_time.replace(tzinfo=timezone.utc)
-                        logger.debug("Converted update_time to UTC")
-
-                    # Calculate elapsed time
-                    elapsed_time = (now - start_time).total_seconds()
-                    logger.debug(f"Elapsed time: {elapsed_time:.2f} seconds")
-
-                    # Check if entry is stale
-                    is_stale = (now - update_time).total_seconds() > (self.settings.cache_ttl_hours * 3600)
-                    logger.debug(f"Cache entry stale status: {is_stale}")
-
-                    # Create status response
-                    status = RequestStatus(
-                        status=cache_entry.status,
-                        job_id=cache_entry.job_id,
-                        start_time=start_time,
-                        elapsed_time_seconds=elapsed_time,
-                        remaining_time_seconds=max(0, self.settings.request_timeout_minutes * 60 - elapsed_time),
-                        price_found=cache_entry.price_found,
-                        error_message=cache_entry.error_message,
-                        details=self._get_status_details(cache_entry.status, elapsed_time)
-                    )
-                    logger.debug(f"Created status response: {status.model_dump()}")
-
-                    # Return cached product if available and not stale
-                    if cache_entry.status == 'completed' and not is_stale:
-                        logger.debug("Cache entry is valid and not stale, attempting to get product...")
-                        product = self._get_product_from_cache(db, url, store)
-                        if product:
-                            logger.debug("Successfully retrieved product from cache")
-                            db.commit()  # Commit the transaction if successful
-                            return product, status
-                        else:
-                            logger.debug("No product found in cache despite completed status")
-
-                    logger.debug("Committing transaction with no product")
-                    db.commit()  # Commit even if no product found
-                    return None, status
-
-                except Exception as e:
-                    logger.error(f"Error in database transaction: {e}")
-                    logger.error(f"Transaction traceback: {traceback.format_exc()}")
-                    db.rollback()
-                    raise
+            if product:
+                self.logger.info(f"Found cached product for URL: {url}")
+                return product.__dict__
+            else:
+                self.logger.info(f"No cached product found for URL: {url}")
+                return None
 
         except Exception as e:
-            logger.error(f"Error getting cached product: {e}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            return None, None
+            self.logger.error(f"Error getting cached product: {e}")
+            return None
 
     def _get_product_from_cache(self, db: Session, url: str, store: str) -> Optional[ProductInfo]:
         """Get product from cache if available."""
@@ -344,58 +308,57 @@ class CacheManager:
             .first()
         )
 
-    def update_cache_with_result(self, url: str, store: str, product_info: dict) -> None:
-        """Update cache with successful result."""
+    async def update_cache_with_result(self, url: str, store_name: str, product_info: Dict[str, Any], job_id: str):
+        """Update cache with product information."""
         try:
-            with get_db() as db:
-                # Update request cache
-                request = (
-                    db.query(RequestCache)
-                    .filter(RequestCache.url == url)
-                    .filter(RequestCache.store == store)
-                    .first()
+            # Update request cache
+            cache_entry = (
+                self.db.query(RequestCache)
+                .filter(RequestCache.url == url)
+                .filter(RequestCache.store == store_name)
+                .filter(RequestCache.job_id == job_id)
+                .first()
+            )
+
+            if cache_entry:
+                cache_entry.status = "completed"
+                cache_entry.price_found = True
+                cache_entry.update_time = datetime.now(timezone.utc)
+            else:
+                cache_entry = RequestCache(
+                    store=store_name,
+                    url=url,
+                    job_id=job_id,
+                    status="completed",
+                    price_found=True,
+                    start_time=datetime.now(timezone.utc),
+                    update_time=datetime.now(timezone.utc)
                 )
+                self.db.add(cache_entry)
 
-                if not request:
-                    request = RequestCache(url=url, store=store)
-                    db.add(request)
-
-                request.status = 'completed'
-                request.price_found = True
-                request.error_message = None
-                request.details = None
-
-                # Update product cache
-                product = (
-                    db.query(Product)
-                    .filter(Product.url == url)
-                    .filter(Product.store == store)
-                    .first()
-                )
-
-                if not product:
-                    product = Product(url=url, store=store)
-                    db.add(product)
-
-                # Update product fields
-                product.name = product_info.get('name')
-                product.price = product_info.get('price')
-                product.price_string = product_info.get('price_string')
-                product.price_per_unit = product_info.get('price_per_unit')
-                product.price_per_unit_string = product_info.get('price_per_unit_string')
-                product.store_id = product_info.get('store_id')
-                product.store_address = product_info.get('store_address')
-                product.store_zip = product_info.get('store_zip')
-                product.brand = product_info.get('brand')
-                product.sku = product_info.get('sku')
-                product.category = product_info.get('category')
-                product.timestamp = datetime.now(timezone.utc)
-
-                db.commit()
+            # Update products table
+            product = Product(
+                store=store_name,
+                url=url,  # Use original URL
+                name=product_info.get("name"),
+                price=product_info.get("price"),
+                price_string=product_info.get("price_string"),
+                price_per_unit=product_info.get("price_per_unit"),
+                price_per_unit_string=product_info.get("price_per_unit_string"),
+                store_id=product_info.get("store_id"),
+                store_address=product_info.get("store_address"),
+                store_zip=product_info.get("store_zip"),
+                brand=product_info.get("brand"),
+                sku=product_info.get("sku"),
+                category=product_info.get("category"),
+                timestamp=datetime.now(timezone.utc)
+            )
+            self.db.add(product)
+            self.db.commit()
 
         except Exception as e:
-            logger.error(f"Error updating cache with result: {e}")
-            db.rollback()
+            self.logger.error(f"Error updating cache: {e}")
+            self.db.rollback()
             raise
 
     def update_cache_with_error(self, url: str, store: str, error_message: str) -> None:
