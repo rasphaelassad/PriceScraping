@@ -26,12 +26,16 @@ class AlbertsonsScraper(BaseScraper):
     def get_scraper_config(self) -> Dict:
         """Return scraper configuration for Albertsons."""
         return {
-            "country": "us",
             "headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
                 "ocp-apim-subscription-key": "6c21edb7bcda4f0e918348db16147431"
-            }
+            },
+            "country": "us",
+            "keepHeaders": True
         }
+
 
     def transform_url(self, url: str) -> str:
         """Transform product detail URL to API URL for scraping."""
