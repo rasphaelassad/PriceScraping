@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Literal, Any, Tuple
+from typing import Dict, List, Optional, Literal, Any
 import logging
 import httpx
 import time
 import os
 import asyncio
-import traceback
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from app.core.config import get_settings
@@ -17,161 +16,230 @@ import uuid
 # Load environment variables from .env file
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class BaseScraper(ABC):
     """Base class for all store-specific scrapers."""
 
-    def __init__(self, mode: str = "batch_async"):
+    TIMEOUT_MINUTES = 10  # Timeout after 10 minutes
+    
+    def __init__(self, mode: Literal["batch", "async"] = "batch"):
         """
         Initialize the scraper.
         
         Args:
-            mode: Either "batch_async" for batch processing or "async" for individual concurrent requests
+            mode: Either "batch" for batch processing or "async" for individual concurrent requests
         """
         self.settings = get_settings()
         self.api_key = self.settings.scraper_api_key
-        if not self.api_key:
-            logger.warning("SCRAPER_API_KEY not set. Using mock data for testing.")
-        self.scraper_config = self.get_scraper_config()
         self.mode = mode
-        self.base_url = "http://api.scraperapi.com"
-        self.status_base_url = "https://api.scraperapi.com/status"
+        self.base_url = "https://async.scraperapi.com/jobs"
+        self.batch_url = "https://async.scraperapi.com/batchjobs"
         self.store_name = None
         logger.info(f"Initialized {self.__class__.__name__} in {mode} mode")
 
     @abstractmethod
-    def get_scraper_config(self) -> Dict[str, Any]:
+    def get_scraper_config(self) -> Dict:
         """
         Return scraper configuration for the specific store.
+        Must be implemented by child classes.
         
         Returns:
-            A dictionary containing scraper configuration.
+            Dict: Configuration parameters for the scraper
         """
         pass
 
     @abstractmethod
-    async def extract_product_info(self, html: str, url: str) -> Optional[Dict[str, Any]]:
+    async def extract_product_info(self, html: str, url: str) -> Dict:
         """
         Extract all product information from HTML content.
+        Must be implemented by child classes.
         
         Args:
-            html: The HTML content to extract information from.
-            url: The URL the content was fetched from.
+            html (str): Raw HTML content
+            url (str): Product URL
             
         Returns:
-            A dictionary containing product information, or None if extraction failed.
+            Dict: Extracted product information
         """
         pass
 
-    async def get_raw_content(self, urls: List[str]) -> Dict[str, Any]:
-        """Get raw content for URLs."""
-        try:
-            tasks = []
-            url_mapping = {}
-            
-            for url in urls:
-                api_url = self.transform_url(url)
-                url_mapping[api_url] = url
-                tasks.append(self._fetch_url(api_url))
-                
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            if len(urls) == 1:
-                result = results[0]
-                if isinstance(result, Exception):
-                    raise result
-                return {"html": result["content"]}
-            
-            response = {}
-            for api_url, result in zip(url_mapping.keys(), results):
-                original_url = url_mapping[api_url]
-                if isinstance(result, Exception):
-                    response[original_url] = {"error": str(result)}
+    async def get_raw_content(self, urls: List[str]) -> Dict[str, Dict]:
+        """Get raw HTML/JSON content for URLs without processing"""
+        url_strings = [str(url) for url in urls]
+        results = {}
+        
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                if self.mode == "batch":
+                    results = await self._get_raw_batch(url_strings, client)
                 else:
-                    response[original_url] = {"html": result["content"]}
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error in get_raw_content: {e}")
-            raise HTTPException(status_code=400, detail=str(e))
+                    tasks = [self._get_raw_single(url, client) for url in url_strings]
+                    task_results = await asyncio.gather(*tasks)
+                    results = dict(zip(url_strings, task_results))
+            except Exception as e:
+                logger.error(f"Error in get_raw_content: {str(e)}")
+                results = {url: {
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                } for url in url_strings}
+                
+        return results
 
-    async def _fetch_url(self, url: str) -> Dict[str, Any]:
-        """Fetch URL content with ScraperAPI using scraper configuration."""
-        config = self.get_scraper_config()
+    async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
+        """Get raw content for a single URL"""
         try:
-            async with aiohttp.ClientSession() as session:
-                params = {
-                    'api_key': self.api_key,
-                    'url': url,
-                    'premium': 'true',
-                    'country': config.get('country', 'us'),
-                    'keep_headers': str(config.get('keepHeaders', True)).lower(),
-                    'render': str(self.store_name in self.get_javascript_required_stores()).lower()
+            config = self.get_scraper_config()
+            # Submit job to ScraperAPI
+            payload = {
+                "url": url,
+                "apiKey": self.api_key,
+                "country_code": config.get('country', 'us'),
+                "render": str(self.store_name in self.get_javascript_required_stores()).lower(),
+                **config
+            }
+            
+            logger.info(f"Fetching URL with ScraperAPI: {url}")
+            
+            response = await client.post(self.base_url, json=payload)
+            if response.status_code != 200:
+                return {
+                    "error": f"API request failed with status {response.status_code}",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
-                
-                headers = config.get('headers', {})
-                logger.info(f"Fetching URL with ScraperAPI: {url}")
-                
-                async with session.get(self.base_url, params=params, headers=headers) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"ScraperAPI error: {error_text}")
-                        raise HTTPException(status_code=response.status, detail=error_text)
-                    
-                    job_id = response.headers.get('X-ScraperAPI-JobId')
-                    status_url = f"{self.status_base_url}/{job_id}" if job_id else None
-                    
-                    content = await response.text()
-                    logger.debug(f"Received response content: {content[:200]}...")
-                    
+
+            job_data = response.json()
+            job_id = job_data.get('id')
+            status_url = job_data.get('statusUrl')
+
+            if not job_id:
+                return {
+                    "error": "No job ID received",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+
+            # Poll for job completion
+            start_time = time.time()
+            while True:
+                if (time.time() - start_time) / 60 >= self.TIMEOUT_MINUTES:
                     return {
-                        "content": content,
-                        "job_id": job_id,
-                        "scraper_status_url": status_url,
-                        "start_time": datetime.now(timezone.utc)
+                        "error": "Job timed out",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
                     }
+
+                status_response = await client.get(status_url)
+                status_data = status_response.json()
+                status = status_data.get('status')
+
+                if status == 'failed':
+                    return {
+                        "error": "Job failed",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                elif status == 'finished':
+                    html = status_data.get('response', {}).get('body')
+                    if html:
+                        return {
+                            "content": html,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "start_time": datetime.now(timezone.utc)
+                        }
+                    else:
+                        return {
+                            "error": "No HTML content in response",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+
+                await asyncio.sleep(5)  # Wait before next poll
+
         except Exception as e:
-            logger.error(f"Error fetching URL {url}: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
+            return {
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+    async def _get_raw_batch(self, urls: List[str], client: httpx.AsyncClient) -> Dict[str, Dict]:
+        """Get raw content for multiple URLs using batch processing"""
+        try:
+            payload = {
+                "urls": urls,
+                "apiKey": self.api_key,
+                "apiParams": self.get_scraper_config()
+            }
+
+            response = await client.post(self.batch_url, json=payload)
+            if response.status_code != 200:
+                return {url: {
+                    "error": f"Batch API request failed with status {response.status_code}",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                } for url in urls}
+
+            jobs = response.json()
+            job_statuses = {job['id']: {'status': 'running', 'url': job['url'], 'statusUrl': job['statusUrl']} for job in jobs}
+            results = {}
+            start_time = time.time()
+
+            while any(status['status'] == 'running' for status in job_statuses.values()):
+                if (time.time() - start_time) / 60 >= self.TIMEOUT_MINUTES:
+                    for job_info in job_statuses.values():
+                        if job_info['status'] == 'running':
+                            results[job_info['url']] = {
+                                "error": "Job timed out",
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }
+                    break
+
+                for job_id, job_info in job_statuses.items():
+                    if job_info['status'] == 'running':
+                        status_response = await client.get(job_info['statusUrl'])
+                        status_data = status_response.json()
+                        current_status = status_data.get('status')
+                        
+                        if current_status == 'failed':
+                            job_info['status'] = 'failed'
+                            results[job_info['url']] = {
+                                "error": "Job failed",
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }
+                        elif current_status == 'finished':
+                            job_info['status'] = 'finished'
+                            html = status_data.get('response', {}).get('body')
+                            if html:
+                                results[job_info['url']] = {
+                                    "content": html,
+                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                }
+                            else:
+                                results[job_info['url']] = {
+                                    "error": "No HTML content in response",
+                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                }
+
+                await asyncio.sleep(5)
+
+            # Fill in any missing results
+            for url in urls:
+                if url not in results:
+                    results[url] = {
+                        "error": "Job processing failed",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+
+            return results
+
+        except Exception as e:
+            return {url: {
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            } for url in urls}
 
     def get_javascript_required_stores(self) -> set:
         """Return set of store names that require JavaScript rendering."""
         return {'walmart', 'costco', 'chefstore'}
-
-    async def get_prices(self, urls: List[str]) -> Dict[str, Any]:
-        """Get prices for multiple URLs using the configured mode."""
-        if self.mode == "batch_async":
-            return await self._get_prices_batch(urls)
-        else:
-            return await self._get_prices_concurrent(urls)
-
-    async def _get_prices_batch(self, urls: List[str]) -> Dict[str, Any]:
-        """Get prices in batch mode. Override in subclass if batch mode is supported."""
-        raise NotImplementedError("Batch mode not implemented for this scraper")
-
-    async def _get_prices_concurrent(self, urls: List[str]) -> Dict[str, Any]:
-        """Get prices using concurrent individual requests."""
-        tasks = [self.get_price(url) for url in urls]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        response = {}
-        for url, result in zip(urls, results):
-            if isinstance(result, Exception):
-                response[url] = {
-                    "request_status": {
-                        "status": "failed",
-                        "error_message": str(result),
-                        "start_time": datetime.now(timezone.utc),
-                        "elapsed_time_seconds": 0.0,
-                        "job_id": str(uuid.uuid4())
-                    }
-                }
-            else:
-                response[url] = result
-        return response
 
     async def get_price(self, url: str) -> Dict[str, Any]:
         """Get price for a single URL. Override in subclass."""
@@ -181,48 +249,36 @@ class BaseScraper(ABC):
         """Transform product detail URL to API URL. Override in subclass."""
         return url
 
-    def standardize_output(self, product_info: Dict[str, Any]) -> Dict[str, Any]:
+    def standardize_output(self, product_info: Dict) -> Optional[Dict]:
         """
-        Standardize the product information output.
+        Standardize the output format across all scrapers
         
         Args:
-            product_info: The raw product information.
+            product_info (Dict): Raw product information
             
         Returns:
-            A dictionary containing standardized product information.
+            Optional[Dict]: Standardized product info or None if invalid
         """
+        if not product_info:
+            return None
+        
         try:
             standardized = {
-                "store": product_info.get("store", "").lower(),
-                "url": product_info.get("url", ""),
-                "name": product_info.get("name", ""),
-                "price": float(product_info.get("price")) if product_info.get("price") is not None else None,
-                "price_string": product_info.get("price_string"),
-                "price_per_unit": float(product_info.get("price_per_unit")) if product_info.get("price_per_unit") is not None else None,
-                "price_per_unit_string": product_info.get("price_per_unit_string"),
-                "store_id": product_info.get("store_id"),
-                "store_address": product_info.get("store_address"),
-                "store_zip": product_info.get("store_zip"),
-                "brand": product_info.get("brand"),
-                "sku": product_info.get("sku"),
-                "category": product_info.get("category"),
-                "timestamp": ensure_utc_datetime(product_info.get("timestamp", datetime.now(timezone.utc)))
+                "store": str(product_info.get("store", "")),
+                "url": str(product_info.get("url", "")),
+                "name": str(product_info.get("name", "")),
+                "price": float(product_info["price"]) if product_info.get("price") not in [None, "", "None"] else None,
+                "price_string": str(product_info.get("price_string", "")) or None,
+                "price_per_unit": float(product_info.get("price_per_unit")) if product_info.get("price_per_unit") not in [None, "", "None"] else None,
+                "price_per_unit_string": str(product_info.get("price_per_unit_string", "")) or None,
+                "store_id": str(product_info.get("store_id", "")) or None,
+                "store_address": str(product_info.get("store_address", "")) or None,
+                "store_zip": str(product_info.get("store_zip", "")) or None,
+                "brand": str(product_info.get("brand", "")) or None,
+                "sku": str(product_info.get("sku", "")) or None,
+                "category": str(product_info.get("category", "")) or None
             }
-            
-            # Validate numeric fields
-            if standardized["price"] is not None and standardized["price"] < 0:
-                logger.warning(f"Negative price found: {standardized['price']}")
-                standardized["price"] = None
-                standardized["price_string"] = None
-                
-            if standardized["price_per_unit"] is not None and standardized["price_per_unit"] < 0:
-                logger.warning(f"Negative price per unit found: {standardized['price_per_unit']}")
-                standardized["price_per_unit"] = None
-                standardized["price_per_unit_string"] = None
-            
             return standardized
-            
         except Exception as e:
-            logger.error(f"Error standardizing output: {e}")
-            logger.error(traceback.format_exc())
-            return product_info  # Return original on error
+            logger.error(f"Error standardizing output: {str(e)}")
+            return None
