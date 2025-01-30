@@ -80,3 +80,6 @@ package-lock.json
 
 #scripts
 scripts/
+
+#logs
+logs/

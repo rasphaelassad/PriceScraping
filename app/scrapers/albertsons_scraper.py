@@ -38,108 +38,94 @@ class AlbertsonsScraper(BaseScraper):
 
 
     def transform_url(self, url: str) -> str:
-        """Transform product detail URL to API URL for scraping."""
+        """Transform Albertsons product URL to API URL."""
         try:
-            if "product-details." in url:
-                # Extract product ID from URL
-                product_id = url.split("product-details.")[-1].split(".")[0]
-                # Transform to API URL format
-                return f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId=177"
-            return url
+            # Extract product ID from URL
+            match = re.search(r'product-details\.(\d+)\.html', url)
+            if not match:
+                logger.error(f"Could not extract product ID from URL: {url}")
+                return url
+                
+            product_id = match.group(1)
+            store_id = "177"  # Default store ID for now
+            api_url = f"https://www.albertsons.com/abs/pub/xapi/pgm/v1/product/{product_id}/channel/instore/store/{store_id}"
+            logger.info(f"Transformed URL {url} to {api_url}")
+            return api_url
+            
         except Exception as e:
             logger.error(f"Error transforming URL {url}: {str(e)}")
             return url
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
-        """Extract product information from Albertsons API response."""
+        """Extract product information from API response."""
         try:
-            soup = BeautifulSoup(html, 'html.parser')
+            # Parse JSON response
+            data = json.loads(html)
             
-            # Find product data in script tag
-            script_tag = soup.find('script', {'type': 'application/ld+json'})
-            if not script_tag:
+            if not data:
+                logger.error("Empty response from API")
                 return None
+            
+            # Extract store info from URL
+            store_match = re.search(r'/store/(\d+)/', url)
+            store_id = store_match.group(1) if store_match else None
+            
+            # Extract price info
+            price = None
+            price_string = None
+            price_per_unit = None
+            price_per_unit_string = None
+            
+            if "items" in data and len(data["items"]) > 0:
+                item = data["items"][0]
                 
-            product_data = json.loads(script_tag.string)
-            
-            # Extract price
-            price_elem = soup.find('span', {'class': 'product-price'})
-            price_string = price_elem.text.strip() if price_elem else None
-            price = float(re.sub(r'[^\d.]', '', price_string)) if price_string else None
-            
-            # Extract other information
-            name = product_data.get('name')
-            brand = product_data.get('brand', {}).get('name')
-            sku = product_data.get('sku')
-            
-            return {
-                "store": "albertsons",
-                "url": url,
-                "name": name,
-                "price": price,
-                "price_string": price_string,
-                "brand": brand,
-                "sku": sku
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error extracting product info: {str(e)}")
-            return None
-
-    async def get_price(self, url: str) -> Dict:
-        """Get price for a single URL"""
-        try:
-            # Transform the URL before fetching
-            api_url = self.transform_url(url)
-            
-            async with httpx.AsyncClient(verify=False) as client:
-                result = await self._get_raw_single(api_url, client)
-                
-                if "error" in result:
-                    raise ValueError(result["error"])
-                
-                # For API URLs, we need to parse JSON instead of HTML
-                if "xapi" in api_url:
+                # Regular price
+                if "price" in item:
                     try:
-                        product_data = json.loads(result["content"])
-                        product_info = {
-                            "store": "albertsons",
-                            "url": url,  # Keep original URL for reference
-                            "name": product_data.get("name"),
-                            "price": float(product_data.get("price", {}).get("regular", 0)),
-                            "price_string": f"${product_data.get('price', {}).get('regular', 0)}",
-                            "brand": product_data.get("brand"),
-                            "sku": product_data.get("sku"),
-                            "store_id": product_data.get("storeId")
-                        }
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse API response: {e}")
-                        raise ValueError("Failed to parse API response")
-                else:
-                    # Fallback to HTML parsing if not an API URL
-                    product_info = await self.extract_product_info(result["content"], url)
-            
-            if not product_info:
-                raise ValueError("Failed to extract product information")
+                        price = float(item["price"]["regular"])
+                        price_string = f"${price:.2f}"
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"Error extracting regular price: {e}")
                 
-            return {
-                "product_info": self.standardize_output(product_info),
-                "request_status": {
-                    "status": "success",
-                    "start_time": result["start_time"],
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
+                # Price per unit
+                if "pricePer" in item:
+                    try:
+                        price_per_unit = float(item["pricePer"]["price"])
+                        unit = item["pricePer"]["unit"]
+                        price_per_unit_string = f"${price_per_unit:.2f}/{unit}"
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"Error extracting price per unit: {e}")
+                
+                # Get original URL from the transformed URL if needed
+                original_url = url
+                if '/xapi/pgm/v1/product/' in url:
+                    product_id = re.search(r'/product/(\d+)/', url)
+                    if product_id:
+                        original_url = f"https://www.albertsons.com/shop/product-details.{product_id.group(1)}.html"
+                
+                # Build product info
+                return {
+                    "store": "albertsons",
+                    "url": original_url,  # Always use the original product URL
+                    "name": item.get("name", ""),
+                    "price": price,
+                    "price_string": price_string,
+                    "price_per_unit": price_per_unit,
+                    "price_per_unit_string": price_per_unit_string,
+                    "store_id": store_id,
+                    "store_address": None,  # Not available in API response
+                    "store_zip": None,  # Not available in API response
+                    "brand": item.get("brand", {}).get("name", None),
+                    "sku": item.get("upc", None),
+                    "category": item.get("categories", [None])[0]
                 }
-            }
             
+            logger.error("No items found in API response")
+            return None
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {str(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Error getting price for {url}: {str(e)}")
-            return {
-                "request_status": {
-                    "status": "failed",
-                    "error_message": str(e),
-                    "start_time": datetime.now(timezone.utc),
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
-                }
-            }
+            logger.error(f"Error extracting product info: {str(e)}")
+            return None

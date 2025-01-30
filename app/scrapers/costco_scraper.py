@@ -100,73 +100,59 @@ class CostcoScraper(BaseScraper):
         except Exception as e:
             logger.error(f"Error extracting data from scripts: {e}")
             logger.error(traceback.format_exc())
-        
+            return None, None, None
+            
         return price_per_unit, price_per_unit_string, delivery_location
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
+        """Extract product information from HTML content.
+
+        Args:
+            html (str): Raw HTML content
+            url (str): Product URL
+
+        Returns:
+            Optional[Dict]: Extracted product information or None if extraction failed
+        """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
             # Extract product name
-            name_elem = soup.find('h1', {'class': 'product-name'})
-            name = name_elem.text.strip() if name_elem else None
+            name_element = soup.select_one('h1.product-name')
+            if not name_element:
+                logger.warning("Could not find product name")
+                return None
+            
+            name = name_element.get_text().strip()
             
             # Extract price
-            price_elem = soup.find('span', {'class': 'price'})
-            price_string = price_elem.text.strip() if price_elem else None
-            price = float(re.sub(r'[^\d.]', '', price_string)) if price_string else None
+            price_element = soup.select_one('div.price span.price')
+            price, price_string = self._extract_price_from_element(price_element)
             
-            # Extract other information
-            product_info = {
+            if not price:
+                logger.warning("Could not extract price")
+                return None
+            
+            # Extract additional data from scripts
+            price_per_unit, price_per_unit_string, delivery_location = self._extract_data_from_scripts(soup)
+            
+            # Extract product number (SKU)
+            sku_element = soup.select_one('div.product-info-specs span.product-info-item-value')
+            sku = sku_element.get_text().strip() if sku_element else None
+            
+            return {
                 "store": "costco",
                 "url": url,
                 "name": name,
                 "price": price,
-                "price_string": price_string
+                "price_string": price_string,
+                "price_per_unit": price_per_unit,
+                "price_per_unit_string": price_per_unit_string,
+                "store_zip": delivery_location,
+                "sku": sku
             }
-            
-            # Try to get additional info from metadata
-            item_number = soup.find('div', {'class': 'item-number'})
-            if item_number:
-                product_info["sku"] = item_number.text.strip().replace("Item ", "")
-            
-            return product_info
             
         except Exception as e:
             logger.error(f"Error extracting Costco product info: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
-
-    async def get_price(self, url: str) -> Dict:
-        try:
-            async with httpx.AsyncClient(verify=False) as client:
-                result = await self._get_raw_single(url, client)
-                
-                if "error" in result:
-                    raise ValueError(result["error"])
-                
-                product_info = await self.extract_product_info(result["content"], url)
-            
-            if not product_info:
-                raise ValueError("Failed to extract product information")
-                
-            return {
-                "product_info": self.standardize_output(product_info),
-                "request_status": {
-                    "status": "success",
-                    "start_time": result["start_time"],
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting Costco price for {url}: {str(e)}")
-            return {
-                "request_status": {
-                    "status": "failed",
-                    "error_message": str(e),
-                    "start_time": datetime.now(timezone.utc),
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
-                }
-            }

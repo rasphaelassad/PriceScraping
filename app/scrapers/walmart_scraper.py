@@ -20,7 +20,7 @@ class WalmartScraper(BaseScraper):
     def get_scraper_config(self) -> Dict:
         return {
             "country": "us",
-            "render": "true",  # Walmart requires JavaScript rendering
+            #"render": "true",  # Walmart requires JavaScript rendering
             "headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             }
@@ -63,38 +63,3 @@ class WalmartScraper(BaseScraper):
         except Exception as e:
             logger.error(f"Error extracting Walmart product info: {str(e)}")
             return None
-
-    async def get_price(self, url: str) -> Dict:
-        try:
-            async with httpx.AsyncClient(verify=False) as client:
-                result = await self._get_raw_single(url, client)
-                
-                if "error" in result:
-                    raise ValueError(result["error"])
-                
-                product_info = await self.extract_product_info(result["content"], url)
-            
-            if not product_info:
-                raise ValueError("Failed to extract product information")
-                
-            return {
-                "product_info": self.standardize_output(product_info),
-                "request_status": {
-                    "status": "success",
-                    "start_time": result["start_time"],
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting Walmart price for {url}: {str(e)}")
-            return {
-                "request_status": {
-                    "status": "failed",
-                    "error_message": str(e),
-                    "start_time": datetime.now(timezone.utc),
-                    "elapsed_time_seconds": 0.0,
-                    "job_id": str(uuid.uuid4())
-                }
-            }
