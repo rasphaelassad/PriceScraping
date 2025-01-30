@@ -1,7 +1,7 @@
 import json
 from parsel import Selector
 from .base_scraper import BaseScraper, logger
-from typing import Dict
+from typing import Dict, Optional
 
 class WalmartScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
@@ -16,7 +16,7 @@ class WalmartScraper(BaseScraper):
             }
         }
 
-    async def extract_product_info(self, html: str, url: str) -> Dict:
+    async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
         try:
             logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)
@@ -36,17 +36,33 @@ class WalmartScraper(BaseScraper):
                     .get("product", {})
             )
 
+            # Extract basic product info
             price_info = product.get("priceInfo", {}).get("unitPrice", {})
             price = price_info.get("price")
             price_string = price_info.get("priceString")
             name = product.get("name")
+
+            # Extract additional product info
+            sku = product.get("usItemId")
+            brand = product.get("brand")
+            category = product.get("category")
+            store_info = product.get("store", {})
+            store_id = store_info.get("id")
+            store_address = store_info.get("address", {}).get("address")
+            store_zip = store_info.get("address", {}).get("postalCode")
 
             result = {
                 "store": "walmart",
                 "url": url,
                 "name": name,
                 "price": float(price) if price else None,
-                "price_string": price_string
+                "price_string": price_string,
+                "store_id": store_id,
+                "store_address": store_address,
+                "store_zip": store_zip,
+                "brand": brand,
+                "sku": sku,
+                "category": category
             }
             
             logger.info(f"Successfully extracted product info: {result}")
@@ -54,8 +70,3 @@ class WalmartScraper(BaseScraper):
         except Exception as e:
             logger.error(f"Error parsing Walmart product info: {str(e)}")
             return None
-
-    # Remove this method as it's not needed and could cause confusion
-    # async def extract_price(self, html: str) -> float:
-    #     product_info = await self.extract_product_info(html, "")
-    #     return product_info.get("price") if product_info else None 

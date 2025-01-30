@@ -1,6 +1,6 @@
 from parsel import Selector
 from .base_scraper import BaseScraper, logger
-from typing import Dict
+from typing import Dict, Optional
 import json
 
 class ChefStoreScraper(BaseScraper):
@@ -18,7 +18,7 @@ class ChefStoreScraper(BaseScraper):
             }
         }
 
-    async def extract_product_info(self, html: str, url: str) -> Dict:
+    async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
         try:
             logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)

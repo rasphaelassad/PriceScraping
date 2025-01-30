@@ -1,28 +1,23 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create_engine
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timezone
-from typing import Optional
-import os
+from datetime import datetime, timezone, timedelta
+from app.schemas.request_schemas import ProductInfo
 
-# Create the database directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
+SQLALCHEMY_DATABASE_URL = "sqlite:///./price_scraping.db"
 
-# Create database engine
-SQLALCHEMY_DATABASE_URL = os.getenv('DATABASE_URL', "sqlite:///data/scraper.db")
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-
-# Create session factory
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create base class for models
 Base = declarative_base()
 
 class Product(Base):
     __tablename__ = "product"
 
     id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
+    store = Column(String)
     url = Column(String, index=True)
     name = Column(String)
     price = Column(Float)
@@ -35,29 +30,9 @@ class Product(Base):
     brand = Column(String)
     sku = Column(String)
     category = Column(String)
-    timestamp = Column(DateTime, default=datetime.now(timezone.utc))
+    timestamp = Column(DateTime(timezone=True))
 
-    @classmethod
-    def from_product_info(cls, product_info):
-        return cls(
-            store=product_info.store,
-            url=product_info.url,
-            name=product_info.name,
-            price=product_info.price,
-            price_string=product_info.price_string,
-            price_per_unit=product_info.price_per_unit,
-            price_per_unit_string=product_info.price_per_unit_string,
-            store_id=product_info.store_id,
-            store_address=product_info.store_address,
-            store_zip=product_info.store_zip,
-            brand=product_info.brand,
-            sku=product_info.sku,
-            category=product_info.category,
-            timestamp=product_info.timestamp
-        )
-
-    def to_product_info(self):
-        from app.schemas.request_schemas import ProductInfo
+    def to_product_info(self) -> ProductInfo:
         return ProductInfo(
             store=self.store,
             url=self.url,
@@ -75,40 +50,42 @@ class Product(Base):
             timestamp=self.timestamp
         )
 
-class RequestCache(Base):
-    __tablename__ = "request_cache"
-
-    id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
-    url = Column(String, index=True)
-    job_id = Column(String, index=True)
-    status = Column(String, index=True)  # 'pending', 'completed', 'failed', 'timeout'
-    start_time = Column(DateTime, default=datetime.now(timezone.utc))
-    update_time = Column(DateTime, default=datetime.now(timezone.utc))
-    price_found = Column(Boolean, default=False)
-    error_message = Column(String, nullable=True)
-
-    @property
-    def is_active(self) -> bool:
-        """Check if the request is still active (less than 10 minutes old)"""
-        if self.status in ['completed', 'failed', 'timeout']:
-            return False
-        now = datetime.now(timezone.utc)
-        return (now - self.start_time).total_seconds() < 600  # 10 minutes
-
-    @property
-    def is_stale(self) -> bool:
-        """Check if the request is stale (older than 24 hours)"""
-        now = datetime.now(timezone.utc)
-        return (now - self.update_time).total_seconds() > 86400  # 24 hours
-
 class PendingRequest(Base):
     __tablename__ = "pending_request"
 
     id = Column(Integer, primary_key=True, index=True)
-    store = Column(String, index=True)
-    url = Column(String, unique=True, index=True)
-    timestamp = Column(DateTime, default=datetime.now)
+    store = Column(String)
+    url = Column(String, index=True)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-# Create all tables
-Base.metadata.create_all(bind=engine) 
+class RequestCache(Base):
+    __tablename__ = "request_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store = Column(String)
+    url = Column(String, index=True)
+    job_id = Column(String, unique=True, index=True)
+    status = Column(String)  # 'pending', 'completed', 'failed', 'timeout'
+    start_time = Column(DateTime(timezone=True))
+    update_time = Column(DateTime(timezone=True))
+    price_found = Column(Boolean)
+    error_message = Column(String)
+
+    @property
+    def is_active(self):
+        """Check if request is still active (less than 10 minutes old)"""
+        if not self.start_time:
+            return False
+        age = datetime.now(timezone.utc) - self.start_time
+        return age < timedelta(minutes=10)
+
+    @property
+    def is_stale(self):
+        """Check if request is stale (more than 24 hours old)"""
+        if not self.update_time:
+            return True
+        age = datetime.now(timezone.utc) - self.update_time
+        return age > timedelta(hours=24)
+
+# Create tables
+Base.metadata.create_all(bind=engine)

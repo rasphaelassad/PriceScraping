@@ -4,7 +4,10 @@ from typing import Dict, List
 import logging
 import asyncio
 
-from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo, RequestStatus, UrlResult
+from app.schemas.request_schemas import (
+    PriceRequest, PriceResponse, ProductInfo, 
+    UrlResult, RequestStatusEnum
+)
 from app.models.database import Product, PendingRequest
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
@@ -45,8 +48,10 @@ class PriceService:
         if not urls_to_fetch:
             logger.info("All results found in cache")
             return PriceResponse(
-                results={url: UrlResult(status=RequestStatus.SUCCESS, product=product)
-                        for url, product in cached_results.items()}
+                results={url: UrlResult(
+                    status=RequestStatusEnum.SUCCESS,
+                    product=product
+                ) for url, product in cached_results.items()}
             )
 
         # Check for pending requests
@@ -66,24 +71,30 @@ class PriceService:
                 url_str = str(url)
                 if url_str in cached_results:
                     results[url_str] = UrlResult(
-                        status=RequestStatus.SUCCESS,
+                        status=RequestStatusEnum.SUCCESS,
                         product=cached_results[url_str]
                     )
                 elif url_str in pending:
                     results[url_str] = UrlResult(
-                        status=RequestStatus.PENDING
+                        status=RequestStatusEnum.PENDING
                     )
                 else:
                     try:
                         product = await scraper.get_prices(url_str)
-                        results[url_str] = UrlResult(
-                            status=RequestStatus.SUCCESS,
-                            product=product
-                        )
+                        if product:
+                            results[url_str] = UrlResult(
+                                status=RequestStatusEnum.SUCCESS,
+                                product=product
+                            )
+                        else:
+                            results[url_str] = UrlResult(
+                                status=RequestStatusEnum.ERROR,
+                                error="Failed to extract product information"
+                            )
                     except Exception as e:
                         logger.error(f"Error scraping URL {url_str}: {str(e)}", exc_info=True)
                         results[url_str] = UrlResult(
-                            status=RequestStatus.ERROR,
+                            status=RequestStatusEnum.ERROR,
                             error=str(e)
                         )
 

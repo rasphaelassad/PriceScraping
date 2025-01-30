@@ -1,15 +1,25 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
+from enum import Enum
+
+class RequestStatusEnum(str, Enum):
+    SUCCESS = "SUCCESS"
+    PENDING = "PENDING"
+    ERROR = "ERROR"
 
 class PriceRequest(BaseModel):
-    store_name: str
+    store: str
     urls: List[HttpUrl]
+
+    @validator('store')
+    def normalize_store(cls, v):
+        return v.lower()
 
 class ProductInfo(BaseModel):
     store: str
     url: str
-    name: str
+    name: Optional[str]
     price: Optional[float]
     price_string: Optional[str]
     price_per_unit: Optional[float]
@@ -20,22 +30,26 @@ class ProductInfo(BaseModel):
     brand: Optional[str]
     sku: Optional[str]
     category: Optional[str]
-    timestamp: datetime
+    timestamp: Optional[datetime]
 
-class RequestStatus(BaseModel):
-    status: str  # 'completed', 'running', 'failed', 'timeout'
-    job_id: Optional[str]
-    start_time: datetime
-    elapsed_time_seconds: float
-    remaining_time_seconds: Optional[float]
-    price_found: Optional[bool]
-    error_message: Optional[str]
-    details: Optional[str]
+    @validator('timestamp', pre=True)
+    def ensure_timezone(cls, v):
+        if v is None:
+            return datetime.now(timezone.utc)
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                return v.replace(tzinfo=timezone.utc)
+            return v
+        raise ValueError('Invalid datetime format')
+
+    @validator('store')
+    def normalize_store(cls, v):
+        return v.lower()
 
 class UrlResult(BaseModel):
-    result: Optional[ProductInfo]
-    request_status: RequestStatus
+    status: RequestStatusEnum
+    product: Optional[ProductInfo] = None
+    error: Optional[str] = None
 
 class PriceResponse(BaseModel):
     results: Dict[str, UrlResult]
-    error: Optional[str] = None 
