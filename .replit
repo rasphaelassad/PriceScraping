@@ -17,7 +17,7 @@ localPort = 8000
 externalPort = 8000
 
 [workflows]
-runButton = "Full App"
+runButton = "FastAPI"
 
 [[workflows.workflow]]
 name = "FastAPI"
