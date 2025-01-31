@@ -5,10 +5,12 @@ import httpx
 import time
 import os
 import asyncio
+import json
+from bs4 import BeautifulSoup
+from parsel import Selector
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
-# Load environment variables from .env file
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 class BaseScraper(ABC):
     API_KEY = os.environ["SCRAPER_API_KEY"]
-    TIMEOUT_MINUTES = 10  # Timeout after 10 minutes
-    
+    TIMEOUT_MINUTES = 10
+
     def __init__(self, mode: Literal["batch", "async"] = "batch"):
         self.scraper_config = self.get_scraper_config()
         self.mode = mode
@@ -26,6 +28,36 @@ class BaseScraper(ABC):
     def get_scraper_config(self) -> Dict:
         """Return scraper configuration for the specific store"""
         pass
+
+    def _extract_json_ld(self, html: str) -> Optional[Dict]:
+        """Extract JSON-LD data from HTML"""
+        try:
+            selector = Selector(text=html)
+            scripts = selector.css('script[type="application/ld+json"]::text').get()
+            return json.loads(scripts) if scripts else None
+        except Exception as e:
+            logger.error(f"Error extracting JSON-LD: {str(e)}")
+            return None
+
+    def _extract_next_data(self, html: str) -> Optional[Dict]:
+        """Extract __NEXT_DATA__ from HTML"""
+        try:
+            selector = Selector(text=html)
+            scripts = selector.css("script#__NEXT_DATA__::text").get()
+            return json.loads(scripts) if scripts else None
+        except Exception as e:
+            logger.error(f"Error extracting __NEXT_DATA__: {str(e)}")
+            return None
+
+    def _get_soup(self, html: str) -> BeautifulSoup:
+        """Get BeautifulSoup object from HTML"""
+        return BeautifulSoup(html, 'html.parser')
+
+    def _extract_price_with_regex(self, text: str) -> Optional[float]:
+        """Extract price from text using regex"""
+        import re
+        match = re.search(r'\$?(\d+\.?\d*)', text)
+        return float(match.group(1)) if match else None
 
     @abstractmethod
     async def extract_product_info(self, html: str, url: str) -> Dict:
@@ -38,7 +70,7 @@ class BaseScraper(ABC):
         """
         url_strings = [str(url) for url in urls]
         results = {}
-        
+
         async with httpx.AsyncClient(verify=False) as client:
             if self.mode == "batch":
                 # Use batch processing for multiple URLs
@@ -48,7 +80,7 @@ class BaseScraper(ABC):
                 tasks = [self._get_raw_single(url, client) for url in url_strings]
                 task_results = await asyncio.gather(*tasks)
                 results = dict(zip(url_strings, task_results))
-        
+
         return results
 
     async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
@@ -61,7 +93,7 @@ class BaseScraper(ABC):
                 "apiKey": self.API_KEY,
                 **self.scraper_config
             }
-            
+
             response = await client.post(api_url, json=payload)
             if response.status_code != 200:
                 return {
@@ -112,7 +144,7 @@ class BaseScraper(ABC):
                         }
 
                 await asyncio.sleep(5)  # Wait before next poll
-                
+
         except Exception as e:
             return {
                 "error": str(e),
@@ -159,7 +191,7 @@ class BaseScraper(ABC):
                         status_response = await client.get(job_info['statusUrl'])
                         status_data = status_response.json()
                         current_status = status_data.get('status')
-                        
+
                         if current_status == 'failed':
                             job_info['status'] = 'failed'
                             results[job_info['url']] = {
@@ -226,7 +258,7 @@ class BaseScraper(ABC):
         """Get product information for multiple URLs"""
         # First get the raw content
         raw_results = await self.get_raw_content(urls)
-        
+
         # Process the raw content to extract product information
         processed_results = {}
         for url, result in raw_results.items():
@@ -239,5 +271,5 @@ class BaseScraper(ABC):
                     processed_results[url] = None
             else:
                 processed_results[url] = None
-                
+
         return processed_results
