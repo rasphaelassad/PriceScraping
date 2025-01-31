@@ -30,6 +30,10 @@ class BaseScraper(ABC):
         """Extract all product information from HTML content"""
         pass
 
+    def transform_url(self, url: str) -> str:
+        """Transform URL if needed. Default implementation returns original URL."""
+        return url
+
     async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
         """Get raw content for a single URL"""
         try:
@@ -74,10 +78,11 @@ class BaseScraper(ABC):
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Get product information for multiple URLs"""
         url_strings = [str(url) for url in urls]
+        original_urls = {self.transform_url(url): url for url in url_strings}
         results = {}
 
         async with httpx.AsyncClient(verify=False) as client:
-            tasks = [self._get_raw_single(url, client) for url in url_strings]
+            tasks = [self._get_raw_single(transformed_url, client) for transformed_url in original_urls.keys()]
             raw_results = await asyncio.gather(*tasks)
             results = dict(zip(url_strings, raw_results))
 
