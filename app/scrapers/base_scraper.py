@@ -198,44 +198,50 @@ class BaseScraper(ABC):
                     'start_time': start_time
                 }
 
-            # Poll for job status
-            elapsed_time = time.time() - start_time
-            initial_timeout = False
+            # Check if we have a cached result
+            cache_manager = CacheManager()
+            cached_request = await cache_manager.get_request_cache(url, self.store_name)
             
-            # Check if we've exceeded the maximum timeout
-            if elapsed_time / 60 >= self.TIMEOUT_MINUTES:
-                error_msg = f"Job {job_id} timed out after {self.TIMEOUT_MINUTES} minutes"
-                logger.error(error_msg)
-                # Clean up the stored job
-                self._active_jobs.pop(url, None)
-                return {
-                    "error": error_msg,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-
-            # Check if we should return early for initial timeout
-            if elapsed_time >= self.INITIAL_WAIT and not initial_timeout:
-                initial_timeout = True
-                logger.info(f"Initial wait time exceeded for job {job_id}, returning no price info")
-                return {
-                    "status": "pending",
-                    "job_id": job_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "message": "Job still running, check back later"
-                }
-
-            status_response = await client.get(status_url)
-            if status_response.status_code != 200:
-                if initial_timeout:
+            if cached_request:
+                logger.info(f"Found existing job for {url}")
+                if cached_request.status == 'finished' and cached_request.price_found:
+                    # Return cached result if it exists and was successful
+                    cached_product = await cache_manager.get_product(url, self.store_name)
+                    if cached_product:
+                        return {
+                            "content": cached_product.to_dict(),
+                            "timestamp": cached_product.timestamp.isoformat(),
+                            "start_time": cached_request.start_time
+                        }
+                elif cached_request.status == 'failed':
+                    # If the cached request failed, try again
+                    logger.info(f"Previous attempt failed for {url}, retrying...")
+                    await cache_manager.delete_request_cache(url, self.store_name)
+                elif cached_request.status == 'running':
+                    # If it's still running, check its status
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time / 60 >= self.TIMEOUT_MINUTES:
+                        error_msg = f"Job {job_id} timed out after {self.TIMEOUT_MINUTES} minutes"
+                        logger.error(error_msg)
+                        await cache_manager.update_request_status(url, self.store_name, 'failed', error_message=error_msg)
+                        self._active_jobs.pop(url, None)
+                        return {
+                            "error": error_msg,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
                     return {
                         "status": "pending",
                         "job_id": job_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "message": "Job still running, check back later"
                     }
+
+            # Poll for job status
+            status_response = await client.get(status_url)
+            if status_response.status_code != 200:
                 error_msg = f"Status check failed with status {status_response.status_code}"
                 logger.error(error_msg)
-                # Clean up the stored job
+                await cache_manager.update_request_status(url, self.store_name, 'failed', error_message=error_msg)
                 self._active_jobs.pop(url, None)
                 return {
                     "error": error_msg,
@@ -245,16 +251,9 @@ class BaseScraper(ABC):
             try:
                 status_data = status_response.json()
             except Exception as e:
-                if initial_timeout:
-                    return {
-                        "status": "pending",
-                        "job_id": job_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "message": "Job still running, check back later"
-                    }
                 error_msg = f"Failed to parse status response: {str(e)}"
                 logger.error(error_msg)
-                # Clean up the stored job
+                await cache_manager.update_request_status(url, self.store_name, 'failed', error_message=error_msg)
                 self._active_jobs.pop(url, None)
                 return {
                     "error": error_msg,
@@ -267,7 +266,7 @@ class BaseScraper(ABC):
             if status == 'failed':
                 error_msg = f"Job {job_id} failed: {status_data.get('error', 'Unknown error')}"
                 logger.error(error_msg)
-                # Clean up the stored job
+                await cache_manager.update_request_status(url, self.store_name, 'failed', error_message=error_msg)
                 self._active_jobs.pop(url, None)
                 return {
                     "error": error_msg,
@@ -278,7 +277,7 @@ class BaseScraper(ABC):
                 html = response_data.get('body')
                 if html:
                     logger.info(f"Job {job_id} completed successfully")
-                    # Clean up the stored job on success
+                    await cache_manager.update_request_status(url, self.store_name, 'finished')
                     self._active_jobs.pop(url, None)
                     return {
                         "content": html,
@@ -288,7 +287,7 @@ class BaseScraper(ABC):
                 else:
                     error_msg = f"No content in response for job {job_id}"
                     logger.error(error_msg)
-                    # Clean up the stored job
+                    await cache_manager.update_request_status(url, self.store_name, 'failed', error_message=error_msg)
                     self._active_jobs.pop(url, None)
                     return {
                         "error": error_msg,
@@ -296,6 +295,7 @@ class BaseScraper(ABC):
                     }
 
             # Job is still running
+            await cache_manager.update_request_status(url, self.store_name, 'running')
             return {
                 "status": "pending",
                 "job_id": job_id,
