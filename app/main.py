@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect
 from datetime import datetime, timedelta, timezone
+from typing import Dict, Any
 import logging
 import asyncio
 
@@ -230,17 +231,18 @@ def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, 
     Get all data from a specified database table.
     Currently supports: 'product' and 'pending_request' tables.
     """
-    # Get the table class based on name
-    table_map = {
-        "product": Product,
-        "pending_request": PendingRequest
-    }
-    
-    if table_name not in table_map:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Table '{table_name}' not found. Available tables: {', '.join(table_map.keys())}"
-        )
+    try:
+        # Get the table class based on name
+        table_map = {
+            "product": Product,
+            "pending_request": PendingRequest
+        }
+        
+        if table_name not in table_map:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Table '{table_name}' not found. Available tables: {', '.join(table_map.keys())}"
+            )
     
     try:
         # Query all records from the table
@@ -295,10 +297,14 @@ def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, 
 def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
     """Get URLs that are currently being processed"""
     pending = {}
-    # Clean up old pending requests (older than 10 minutes)
-    cleanup_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-    db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
-    db.commit()
+    try:
+        # Clean up old pending requests (older than 10 minutes)
+        cleanup_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error cleaning up pending requests: {str(e)}")
+        db.rollback()
     
     for url in urls:
         pending_request = (
