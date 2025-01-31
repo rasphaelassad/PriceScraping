@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.schemas.request_schemas import PriceRequest
-from app.scrapers.base_scraper import SUPPORTED_STORES
+from app.scrapers.store_registry import SUPPORTED_STORES
 
 router = APIRouter(prefix="/api", tags=["stores"])
 
