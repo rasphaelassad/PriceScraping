@@ -1,22 +1,19 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import inspect
+from datetime import datetime, timedelta, timezone
+import logging
+import asyncio
+
 from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo, RequestStatus, UrlResult
+from app.models.database import SessionLocal, Product, PendingRequest, RequestCache
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
-from app.models.database import SessionLocal, Product, PendingRequest, Base, RequestCache
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
-import logging
-from sqlalchemy import inspect
-from fastapi.responses import JSONResponse
-import httpx
-import time
-import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,20 +30,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Dependency to get database session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
+# Static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-@app.get("/")
-def serve_spa():
-    return FileResponse("app/static/index.html")
-
+# Store configurations
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
     "albertsons": AlbertsonsScraper,
@@ -54,11 +41,19 @@ SUPPORTED_STORES = {
     "costco": CostcoScraper,
 }
 
+# Database dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Cache management functions
 def get_cached_results(db: Session, urls: list[str]) -> dict:
-    """Get cached results that are less than 24 hours old"""
     cached_products = {}
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-    
+
     for url in urls:
         cached = (
             db.query(Product)
@@ -68,77 +63,33 @@ def get_cached_results(db: Session, urls: list[str]) -> dict:
         )
         if cached:
             cached_products[str(url)] = cached.to_product_info()
-    
+
     return cached_products
 
-def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
-    """Get URLs that are currently being processed"""
-    pending = {}
-    # Clean up old pending requests (older than 10 minutes)
-    cleanup_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-    db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
-    db.commit()
-    
-    for url in urls:
-        pending_request = (
-            db.query(PendingRequest)
-            .filter(PendingRequest.url == str(url))
-            .filter(PendingRequest.store == store)
-            .first()
-        )
-        if pending_request:
-            pending[str(url)] = True
-    
-    return pending
-
-def add_pending_requests(db: Session, store: str, urls: list[str]):
-    """Add URLs to pending requests"""
-    for url in urls:
-        url_str = str(url)
-        # Check if request already exists
-        existing = db.query(PendingRequest).filter(PendingRequest.url == url_str).first()
-        if existing:
-            # Update timestamp of existing request
-            existing.timestamp = datetime.now(timezone.utc)
-        else:
-            # Create new request
-            pending = PendingRequest(store=store, url=url_str)
-            db.add(pending)
-    db.commit()
-
-def remove_pending_requests(db: Session, urls: list[str]):
-    """Remove URLs from pending requests"""
-    for url in urls:
-        db.query(PendingRequest).filter(PendingRequest.url == str(url)).delete()
-    db.commit()
-
 def cache_results(db: Session, results: dict):
-    """Cache the results in the database. Skip products with null prices."""
     for url, product_info_dict in results.items():
         if not product_info_dict or product_info_dict.get('price') is None:
             logger.info(f"Skipping product with null price for URL: {url}")
             continue
-            
-        # Convert dictionary to ProductInfo model
+
         product_info_dict['timestamp'] = datetime.now(timezone.utc)
         product_info = ProductInfo(**product_info_dict)
-            
-        # Convert Pydantic Url to string for database storage
         url_str = str(url)
-            
-        # Check if product exists in cache
+
         existing = db.query(Product).filter(Product.url == url_str).first()
         if existing:
-            # Update existing cache entry
-            product_info_dict = product_info.dict()
             for key, value in product_info_dict.items():
                 setattr(existing, key, value)
         else:
-            # Create new cache entry
             db_product = Product.from_product_info(product_info)
             db.add(db_product)
-    
+
     db.commit()
+
+# Routes
+@app.get("/")
+def serve_spa():
+    return FileResponse("app/static/index.html")
 
 @app.post("/get-prices")
 async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
@@ -148,11 +99,15 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         final_results = {}
         now = datetime.now(timezone.utc)
 
-        # Check cache for each URL
+        if store_name not in SUPPORTED_STORES:
+            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
+
+        scraper = SUPPORTED_STORES[store_name]()
+
         for url in urls:
             url_str = str(url)
-            
-            # Check product cache first (24h)
+
+            # Check cache first
             cached_product = (
                 db.query(Product)
                 .filter(Product.url == url_str)
@@ -162,7 +117,6 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             )
 
             if cached_product:
-                # Return cached result
                 status = RequestStatus(
                     status='completed',
                     start_time=cached_product.timestamp,
@@ -177,48 +131,10 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                 )
                 continue
 
-            # Check request cache
-            cache_entry = (
-                db.query(RequestCache)
-                .filter(RequestCache.url == url_str)
-                .filter(RequestCache.store == store_name)
-                .filter(RequestCache.update_time > now - timedelta(minutes=10))
-                .first()
-            )
-
-            if cache_entry:
-                # Request already in progress, check status
-                scraper = SUPPORTED_STORES[store_name]()
-                status_response = await scraper._check_job_status(cache_entry.job_id)
-                
-                if status_response.get('status') == 'finished':
-                    # Process result
-                    html = status_response.get('response', {}).get('body')
-                    if html:
-                        product_info = await scraper.extract_product_info(html, url_str)
-                        if product_info:
-                            product_info['timestamp'] = now
-                            cache_results(db, {url_str: product_info})
-                            status = RequestStatus(
-                                status='completed',
-                                job_id=cache_entry.job_id,
-                                start_time=cache_entry.start_time,
-                                elapsed_time_seconds=(now - cache_entry.start_time).total_seconds(),
-                                remaining_time_seconds=0,
-                                price_found=True,
-                                details="Result processed"
-                            )
-                            final_results[url_str] = UrlResult(
-                                result=product_info,
-                                request_status=status
-                            )
-                            continue
-
-            # Need to make new request
-            scraper = SUPPORTED_STORES[store_name]()
+            # Start new scraping job
             api_response = await scraper._start_scraper_job(url_str)
             job_id = api_response.get('id')
-            
+
             if not job_id:
                 status = RequestStatus(
                     status='failed',
@@ -226,16 +142,12 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                     elapsed_time_seconds=0,
                     remaining_time_seconds=0,
                     price_found=False,
-                    error_message="Failed to get job ID",
-                    details="Failed to start scraper job"
+                    error_message="Failed to get job ID"
                 )
-                final_results[url_str] = UrlResult(
-                    result=None,
-                    request_status=status
-                )
+                final_results[url_str] = UrlResult(result=None, request_status=status)
                 continue
 
-            # Save to request cache
+            # Create request cache entry
             cache_entry = RequestCache(
                 store=store_name,
                 url=url_str,
@@ -247,7 +159,6 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             db.add(cache_entry)
             db.commit()
 
-            # Add initial status for new request
             status = RequestStatus(
                 status='running',
                 job_id=job_id,
@@ -257,369 +168,10 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                 price_found=None,
                 details="Request started"
             )
-            final_results[url_str] = UrlResult(
-                result=None,
-                request_status=status
-            )
-                
-                status = RequestStatus(
-                    status='failed',
-                    job_id=job_id,
-                    start_time=cache_entry.start_time,
-                    elapsed_time_seconds=60,
-                    remaining_time_seconds=0,
-                    price_found=False,
-                    error_message="Timeout waiting for result",
-                    details="Request timed out after 60 seconds"
-                )
-                final_results[url_str] = UrlResult(
-                    result=None,
-                    request_status=status
-                )
+            final_results[url_str] = UrlResult(result=None, request_status=status)
 
         return PriceResponse(results=final_results)
-        
-        logger.info(f"Creating scraper for store: {store_name}")
-        scraper_class = SUPPORTED_STORES.get(store_name)
-        
-        if not scraper_class:
-            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
-        
-        # Initialize results dictionary
-        final_results = {}
-        
-        # Clean up stale cache entries
-        cleanup_time = datetime.now(timezone.utc) - timedelta(hours=24)
-        db.query(RequestCache).filter(RequestCache.update_time < cleanup_time).delete()
-        db.commit()
-        
-        # Process each URL
-        urls_to_process = []
-        for url in urls:
-            url_str = str(url)
-            now = datetime.now(timezone.utc)
-            
-            # Check existing cache entry
-            cache_entry = (
-                db.query(RequestCache)
-                .filter(RequestCache.url == url_str)
-                .filter(RequestCache.store == store_name)
-                .order_by(RequestCache.update_time.desc())
-                .first()
-            )
-            
-            if cache_entry:
-                elapsed_time = (now - cache_entry.start_time).total_seconds()
-                
-                if cache_entry.status == 'completed':
-                    # Get from product cache if completed
-                    product = (
-                        db.query(Product)
-                        .filter(Product.url == url_str)
-                        .filter(Product.store == store_name)
-                        .order_by(Product.timestamp.desc())
-                        .first()
-                    )
-                    
-                    status = RequestStatus(
-                        status='completed',
-                        job_id=cache_entry.job_id,
-                        start_time=cache_entry.start_time,
-                        elapsed_time_seconds=elapsed_time,
-                        remaining_time_seconds=0,
-                        price_found=cache_entry.price_found,
-                        error_message=cache_entry.error_message,
-                        details=f"Request completed in {elapsed_time:.1f} seconds"
-                    )
-                    
-                    if product and not cache_entry.is_stale:
-                        final_results[url_str] = UrlResult(
-                            result=product.to_product_info(),
-                            request_status=status
-                        )
-                        continue
-                
-                elif cache_entry.status == 'pending':
-                    # Check job status with scraper API
-                    scraper = SUPPORTED_STORES[store_name]()
-                    status_response = await scraper._check_job_status(cache_entry.job_id)
-                    
-                    if elapsed_time > 600:  # 10 minutes timeout
-                        # Mark as failed and create new request
-                        cache_entry.status = 'failed'
-                        cache_entry.error_message = "Job exceeded 10 minute timeout"
-                        db.commit()
-                        
-                        # Start new job
-                        api_response = await scraper._start_scraper_job(url_str)
-                        new_job_id = api_response.get('id')
-                        
-                        if new_job_id:
-                            new_cache_entry = RequestCache(
-                                store=store_name,
-                                url=url_str,
-                                job_id=new_job_id,
-                                status='pending',
-                                start_time=now,
-                                update_time=now
-                            )
-                            db.add(new_cache_entry)
-                            db.commit()
-                            
-                            status = RequestStatus(
-                                status='running',
-                                job_id=new_job_id,
-                                start_time=now,
-                                elapsed_time_seconds=0,
-                                remaining_time_seconds=600,
-                                price_found=None,
-                                error_message=None,
-                                details="Started new request after timeout"
-                            )
-                        else:
-                            status = RequestStatus(
-                                status='failed',
-                                job_id=cache_entry.job_id,
-                                start_time=cache_entry.start_time,
-                                elapsed_time_seconds=elapsed_time,
-                                remaining_time_seconds=0,
-                                price_found=False,
-                                error_message="Failed to create new job after timeout",
-                                details="Job timed out and new request failed"
-                            )
-                    else:
-                        # Job still running within timeout
-                        remaining_time = 600 - elapsed_time
-                        status = RequestStatus(
-                            status='running',
-                            job_id=cache_entry.job_id,
-                            start_time=cache_entry.start_time,
-                            elapsed_time_seconds=elapsed_time,
-                            remaining_time_seconds=remaining_time,
-                            price_found=None,
-                            error_message=None,
-                            details=f"Request running for {elapsed_time:.1f} seconds"
-                        )
-                    
-                    final_results[url_str] = UrlResult(
-                        result=None,
-                        request_status=status
-                    )
-                    continue
-                
-                elif cache_entry.status in ['failed', 'timeout']:
-                    status = RequestStatus(
-                        status=cache_entry.status,
-                        job_id=cache_entry.job_id,
-                        start_time=cache_entry.start_time,
-                        elapsed_time_seconds=elapsed_time,
-                        remaining_time_seconds=0,
-                        price_found=cache_entry.price_found,
-                        error_message=cache_entry.error_message,
-                        details=f"Request {cache_entry.status} after {elapsed_time:.1f} seconds"
-                    )
-                    
-                    final_results[url_str] = UrlResult(
-                        result=None,
-                        request_status=status
-                    )
-                    continue
-            
-            # URL needs processing
-            urls_to_process.append(url)
-            
-            # Generate a unique job ID
-            job_id = f"{store_name}_{int(time.time())}_{len(urls_to_process)}"
-            
-            # Create pending entry
-            new_cache_entry = RequestCache(
-                store=store_name,
-                url=url_str,
-                job_id=job_id,
-                status='pending',
-                start_time=now,
-                update_time=now
-            )
-            db.add(new_cache_entry)
-            db.commit()
-            
-            # Add pending result with status
-            status = RequestStatus(
-                status='running',
-                job_id=job_id,
-                start_time=now,
-                elapsed_time_seconds=0,
-                remaining_time_seconds=600,  # 10 minutes
-                price_found=None,
-                error_message=None,
-                details="Request just started"
-            )
-            
-            final_results[url_str] = UrlResult(
-                result=None,
-                request_status=status
-            )
-        
-        # Process new URLs in background if any
-        if urls_to_process:
-            # Create an instance of the scraper
-            scraper = scraper_class()
-            
-            # Function to process URLs in background
-            async def process_urls_background():
-                try:
-                    logger.info(f"Starting background processing for URLs: {urls_to_process}")
-                    
-                    try:
-                        # Set a 10-minute timeout for the scraping
-                        async with asyncio.timeout(600):  # 10 minutes in seconds
-                            results = await scraper.get_prices(urls_to_process)
-                            
-                            # Update cache and store results
-                            for url in urls_to_process:
-                                url_str = str(url)
-                                cache_entry = (
-                                    db.query(RequestCache)
-                                    .filter(RequestCache.url == url_str)
-                                    .filter(RequestCache.store == store_name)
-                                    .order_by(RequestCache.update_time.desc())
-                                    .first()
-                                )
-                                
-                                if cache_entry:
-                                    price_info = results.get(url_str)
-                                    if price_info:
-                                        # Update cache entry
-                                        cache_entry.status = 'completed'
-                                        cache_entry.price_found = True
-                                        cache_entry.update_time = datetime.now(timezone.utc)
-                                        
-                                        # Store in product cache
-                                        price_info['timestamp'] = datetime.now(timezone.utc)
-                                        cache_results(db, {url_str: price_info})
-                                    else:
-                                        cache_entry.status = 'completed'
-                                        cache_entry.price_found = False
-                                        cache_entry.update_time = datetime.now(timezone.utc)
-                                        cache_entry.error_message = "Price not found"
-                                    
-                                    db.commit()
-                                    
-                    except asyncio.TimeoutError:
-                        logger.error("Background processing timed out after 10 minutes")
-                        # Update cache entries as timed out
-                        for url in urls_to_process:
-                            url_str = str(url)
-                            cache_entry = (
-                                db.query(RequestCache)
-                                .filter(RequestCache.url == url_str)
-                                .filter(RequestCache.store == store_name)
-                                .order_by(RequestCache.update_time.desc())
-                                .first()
-                            )
-                            if cache_entry:
-                                cache_entry.status = 'timeout'
-                                cache_entry.update_time = datetime.now(timezone.utc)
-                                cache_entry.error_message = "Request timed out after 10 minutes"
-                        db.commit()
-                    except Exception as e:
-                        logger.error(f"Error in background processing: {str(e)}")
-                        # Update cache entries as failed
-                        for url in urls_to_process:
-                            url_str = str(url)
-                            cache_entry = (
-                                db.query(RequestCache)
-                                .filter(RequestCache.url == url_str)
-                                .filter(RequestCache.store == store_name)
-                                .order_by(RequestCache.update_time.desc())
-                                .first()
-                            )
-                            if cache_entry:
-                                cache_entry.status = 'failed'
-                                cache_entry.update_time = datetime.now(timezone.utc)
-                                cache_entry.error_message = str(e)
-                        db.commit()
-                    
-                except Exception as e:
-                    logger.error(f"Background task error: {str(e)}")
-            
-            # Start background processing
-            asyncio.create_task(process_urls_background())
-        
-        # Wait up to 1 minute for immediate results
-        if urls_to_process:
-            try:
-                async with asyncio.timeout(60):  # 1 minute timeout
-                    while True:
-                        # Check if any URLs are now in product cache
-                        new_cached = get_cached_results(db, urls_to_process)
-                        if new_cached:
-                            for url_str, product_info in new_cached.items():
-                                cache_entry = (
-                                    db.query(RequestCache)
-                                    .filter(RequestCache.url == url_str)
-                                    .filter(RequestCache.store == store_name)
-                                    .order_by(RequestCache.update_time.desc())
-                                    .first()
-                                )
-                                
-                                if cache_entry:
-                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
-                                    status = RequestStatus(
-                                        status='completed',
-                                        job_id=cache_entry.job_id,
-                                        start_time=cache_entry.start_time,
-                                        elapsed_time_seconds=elapsed_time,
-                                        remaining_time_seconds=0,
-                                        price_found=cache_entry.price_found,
-                                        error_message=cache_entry.error_message,
-                                        details=f"Request completed in {elapsed_time:.1f} seconds"
-                                    )
-                                    
-                                    final_results[url_str] = UrlResult(
-                                        result=product_info,
-                                        request_status=status
-                                    )
-                            
-                            urls_to_process = [url for url in urls_to_process if str(url) not in new_cached]
-                            if not urls_to_process:
-                                break
-                        
-                        # Update status for remaining URLs
-                        for url in urls_to_process:
-                            url_str = str(url)
-                            if url_str in final_results:
-                                cache_entry = (
-                                    db.query(RequestCache)
-                                    .filter(RequestCache.url == url_str)
-                                    .filter(RequestCache.store == store_name)
-                                    .order_by(RequestCache.update_time.desc())
-                                    .first()
-                                )
-                                
-                                if cache_entry:
-                                    elapsed_time = (datetime.now(timezone.utc) - cache_entry.start_time).total_seconds()
-                                    remaining_time = max(0, 600 - elapsed_time)
-                                    
-                                    status = RequestStatus(
-                                        status='running',
-                                        job_id=cache_entry.job_id,
-                                        start_time=cache_entry.start_time,
-                                        elapsed_time_seconds=elapsed_time,
-                                        remaining_time_seconds=remaining_time,
-                                        price_found=None,
-                                        error_message=None,
-                                        details=f"Request running for {elapsed_time:.1f} seconds, {remaining_time:.1f} seconds remaining"
-                                    )
-                                    
-                                    final_results[url_str].request_status = status
-                        
-                        await asyncio.sleep(5)
-            except asyncio.TimeoutError:
-                logger.info("Timeout reached, returning partial results with status")
-        
-        return PriceResponse(results=final_results)
-        
+
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -631,6 +183,46 @@ def get_supported_stores():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+@app.get("/tables")
+def get_tables(db: Session = Depends(get_db)):
+    try:
+        inspector = inspect(db.bind)
+        database_info = {}
+
+        for table_name in inspector.get_table_names():
+            columns = []
+            for column in inspector.get_columns(table_name):
+                columns.append({
+                    "name": column["name"],
+                    "type": str(column["type"]),
+                    "nullable": column["nullable"]
+                })
+
+            database_info[table_name] = {
+                "columns": columns,
+                "row_count": db.query(db.bind.table_metadata.tables[table_name]).count()
+            }
+
+        return JSONResponse(content=database_info)
+    except Exception as e:
+        logger.error(f"Error getting database tables: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/raw-scrape")
+async def get_raw_html(request: PriceRequest, db: Session = Depends(get_db)):
+    try:
+        store_name = request.store_name.lower()
+        if store_name not in SUPPORTED_STORES:
+            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
+
+        scraper = SUPPORTED_STORES[store_name]()
+        raw_results = await scraper.get_raw_content(request.urls)
+        return JSONResponse(content=raw_results)
+
+    except Exception as e:
+        logger.error(f"Error processing raw scrape request: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/table/{table_name}")
 def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
@@ -700,52 +292,43 @@ def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, 
             detail=f"Error fetching data from table: {str(e)}"
         )
 
-@app.get("/tables")
-def get_tables(db: Session = Depends(get_db)):
-    """Get all tables in the database and their structure"""
-    try:
-        inspector = inspect(db.bind)
-        database_info = {}
-        
-        for table_name in inspector.get_table_names():
-            columns = []
-            for column in inspector.get_columns(table_name):
-                columns.append({
-                    "name": column["name"],
-                    "type": str(column["type"]),
-                    "nullable": column["nullable"]
-                })
-            
-            database_info[table_name] = {
-                "columns": columns,
-                "row_count": db.query(db.bind.table_metadata.tables[table_name]).count()
-            }
-            
-        return JSONResponse(content=database_info)
-    except Exception as e:
-        logger.error(f"Error getting database tables: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+def get_pending_requests(db: Session, store: str, urls: list[str]) -> dict:
+    """Get URLs that are currently being processed"""
+    pending = {}
+    # Clean up old pending requests (older than 10 minutes)
+    cleanup_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    db.query(PendingRequest).filter(PendingRequest.timestamp < cleanup_time).delete()
+    db.commit()
+    
+    for url in urls:
+        pending_request = (
+            db.query(PendingRequest)
+            .filter(PendingRequest.url == str(url))
+            .filter(PendingRequest.store == store)
+            .first()
+        )
+        if pending_request:
+            pending[str(url)] = True
+    
+    return pending
 
-@app.post("/raw-scrape")
-async def get_raw_html(request: PriceRequest, db: Session = Depends(get_db)):
-    """Get raw HTML/JSON response without processing"""
-    try:
-        store_name = request.store_name.lower()
-        urls = request.urls
-        
-        logger.info(f"Creating scraper for store: {store_name}")
-        scraper_class = SUPPORTED_STORES.get(store_name)
-        
-        if not scraper_class:
-            raise HTTPException(status_code=400, detail=f"Unsupported store: {store_name}")
-            
-        scraper = scraper_class()
-        
-        logger.info(f"Fetching raw content for URLs: {urls}")
-        raw_results = await scraper.get_raw_content(urls)
-        
-        return JSONResponse(content=raw_results)
-        
-    except Exception as e:
-        logger.error(f"Error processing raw scrape request: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+def add_pending_requests(db: Session, store: str, urls: list[str]):
+    """Add URLs to pending requests"""
+    for url in urls:
+        url_str = str(url)
+        # Check if request already exists
+        existing = db.query(PendingRequest).filter(PendingRequest.url == url_str).first()
+        if existing:
+            # Update timestamp of existing request
+            existing.timestamp = datetime.now(timezone.utc)
+        else:
+            # Create new request
+            pending = PendingRequest(store=store, url=url_str)
+            db.add(pending)
+    db.commit()
+
+def remove_pending_requests(db: Session, urls: list[str]):
+    """Remove URLs from pending requests"""
+    for url in urls:
+        db.query(PendingRequest).filter(PendingRequest.url == str(url)).delete()
+    db.commit()
