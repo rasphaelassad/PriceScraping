@@ -247,37 +247,20 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
             db.add(cache_entry)
             db.commit()
 
-            # Wait up to 1 minute for result
-            start_wait = time.time()
-            while (time.time() - start_wait) < 60:
-                status_response = await scraper._check_job_status(job_id)
-                if status_response.get('status') == 'finished':
-                    html = status_response.get('response', {}).get('body')
-                    if html:
-                        product_info = await scraper.extract_product_info(html, url_str)
-                        if product_info:
-                            product_info['timestamp'] = now
-                            cache_results(db, {url_str: product_info})
-                            status = RequestStatus(
-                                status='completed',
-                                job_id=job_id,
-                                start_time=cache_entry.start_time,
-                                elapsed_time_seconds=(time.time() - start_wait),
-                                remaining_time_seconds=0,
-                                price_found=True,
-                                details="Result processed"
-                            )
-                            final_results[url_str] = UrlResult(
-                                result=product_info,
-                                request_status=status
-                            )
-                            break
-                await asyncio.sleep(5)
-            else:
-                # Timeout reached
-                cache_entry.status = 'failed'
-                cache_entry.error_message = "Timeout waiting for result"
-                db.commit()
+            # Add initial status for new request
+            status = RequestStatus(
+                status='running',
+                job_id=job_id,
+                start_time=now,
+                elapsed_time_seconds=0,
+                remaining_time_seconds=600,
+                price_found=None,
+                details="Request started"
+            )
+            final_results[url_str] = UrlResult(
+                result=None,
+                request_status=status
+            )
                 
                 status = RequestStatus(
                     status='failed',
@@ -356,19 +339,67 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
                         )
                         continue
                 
-                elif cache_entry.status == 'pending' and cache_entry.is_active:
-                    # Still processing
-                    remaining_time = max(0, 600 - elapsed_time)  # 600 seconds = 10 minutes
-                    status = RequestStatus(
-                        status='running',
-                        job_id=cache_entry.job_id,
-                        start_time=cache_entry.start_time,
-                        elapsed_time_seconds=elapsed_time,
-                        remaining_time_seconds=remaining_time,
-                        price_found=None,
-                        error_message=None,
-                        details=f"Request running for {elapsed_time:.1f} seconds, {remaining_time:.1f} seconds remaining"
-                    )
+                elif cache_entry.status == 'pending':
+                    # Check job status with scraper API
+                    scraper = SUPPORTED_STORES[store_name]()
+                    status_response = await scraper._check_job_status(cache_entry.job_id)
+                    
+                    if elapsed_time > 600:  # 10 minutes timeout
+                        # Mark as failed and create new request
+                        cache_entry.status = 'failed'
+                        cache_entry.error_message = "Job exceeded 10 minute timeout"
+                        db.commit()
+                        
+                        # Start new job
+                        api_response = await scraper._start_scraper_job(url_str)
+                        new_job_id = api_response.get('id')
+                        
+                        if new_job_id:
+                            new_cache_entry = RequestCache(
+                                store=store_name,
+                                url=url_str,
+                                job_id=new_job_id,
+                                status='pending',
+                                start_time=now,
+                                update_time=now
+                            )
+                            db.add(new_cache_entry)
+                            db.commit()
+                            
+                            status = RequestStatus(
+                                status='running',
+                                job_id=new_job_id,
+                                start_time=now,
+                                elapsed_time_seconds=0,
+                                remaining_time_seconds=600,
+                                price_found=None,
+                                error_message=None,
+                                details="Started new request after timeout"
+                            )
+                        else:
+                            status = RequestStatus(
+                                status='failed',
+                                job_id=cache_entry.job_id,
+                                start_time=cache_entry.start_time,
+                                elapsed_time_seconds=elapsed_time,
+                                remaining_time_seconds=0,
+                                price_found=False,
+                                error_message="Failed to create new job after timeout",
+                                details="Job timed out and new request failed"
+                            )
+                    else:
+                        # Job still running within timeout
+                        remaining_time = 600 - elapsed_time
+                        status = RequestStatus(
+                            status='running',
+                            job_id=cache_entry.job_id,
+                            start_time=cache_entry.start_time,
+                            elapsed_time_seconds=elapsed_time,
+                            remaining_time_seconds=remaining_time,
+                            price_found=None,
+                            error_message=None,
+                            details=f"Request running for {elapsed_time:.1f} seconds"
+                        )
                     
                     final_results[url_str] = UrlResult(
                         result=None,
