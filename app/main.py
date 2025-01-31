@@ -92,7 +92,7 @@ def cache_results(db: Session, results: dict):
 def serve_spa():
     return FileResponse("app/static/index.html")
 
-@app.post("/get-prices")
+@app.post("/api/get-prices")
 async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
     try:
         store_name = request.store_name.lower()
@@ -177,11 +177,11 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/supported-stores")
+@app.get("/api/supported-stores")
 def get_supported_stores():
     return {"supported_stores": list(SUPPORTED_STORES.keys())}
 
-@app.get("/health")
+@app.get("/api/health")
 def health_check():
     return {"status": "healthy"}
 
