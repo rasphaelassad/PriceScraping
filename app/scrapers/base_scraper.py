@@ -34,6 +34,33 @@ class BaseScraper(ABC):
         """Transform URL if needed. Default implementation returns original URL."""
         return url
 
+    async def _check_job_status(self, job_id: str) -> Dict:
+        """Check status of a scraper job"""
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                status_url = f"https://async.scraperapi.com/jobs/{job_id}"
+                response = await client.get(status_url)
+                return response.json()
+        except Exception as e:
+            logger.error(f"Error checking job status: {e}")
+            return {"status": "failed", "error": str(e)}
+
+    async def _start_scraper_job(self, url: str) -> Dict:
+        """Start a new scraper job"""
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                api_url = "https://async.scraperapi.com/jobs"
+                payload = {
+                    "url": url,
+                    "apiKey": self.API_KEY,
+                    **self.scraper_config
+                }
+                response = await client.post(api_url, json=payload)
+                return response.json()
+        except Exception as e:
+            logger.error(f"Error starting scraper job: {e}")
+            return {"error": str(e)}
+
     async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
         """Get raw content for a single URL"""
         try:

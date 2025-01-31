@@ -145,6 +145,156 @@ async def get_prices(request: PriceRequest, db: Session = Depends(get_db)):
     try:
         store_name = request.store_name.lower()
         urls = request.urls
+        final_results = {}
+        now = datetime.now(timezone.utc)
+
+        # Check cache for each URL
+        for url in urls:
+            url_str = str(url)
+            
+            # Check product cache first (24h)
+            cached_product = (
+                db.query(Product)
+                .filter(Product.url == url_str)
+                .filter(Product.store == store_name)
+                .filter(Product.timestamp > now - timedelta(hours=24))
+                .first()
+            )
+
+            if cached_product:
+                # Return cached result
+                status = RequestStatus(
+                    status='completed',
+                    start_time=cached_product.timestamp,
+                    elapsed_time_seconds=0,
+                    remaining_time_seconds=0,
+                    price_found=True,
+                    details="Cached result"
+                )
+                final_results[url_str] = UrlResult(
+                    result=cached_product.to_product_info(),
+                    request_status=status
+                )
+                continue
+
+            # Check request cache
+            cache_entry = (
+                db.query(RequestCache)
+                .filter(RequestCache.url == url_str)
+                .filter(RequestCache.store == store_name)
+                .filter(RequestCache.update_time > now - timedelta(minutes=10))
+                .first()
+            )
+
+            if cache_entry:
+                # Request already in progress, check status
+                scraper = SUPPORTED_STORES[store_name]()
+                status_response = await scraper._check_job_status(cache_entry.job_id)
+                
+                if status_response.get('status') == 'finished':
+                    # Process result
+                    html = status_response.get('response', {}).get('body')
+                    if html:
+                        product_info = await scraper.extract_product_info(html, url_str)
+                        if product_info:
+                            product_info['timestamp'] = now
+                            cache_results(db, {url_str: product_info})
+                            status = RequestStatus(
+                                status='completed',
+                                job_id=cache_entry.job_id,
+                                start_time=cache_entry.start_time,
+                                elapsed_time_seconds=(now - cache_entry.start_time).total_seconds(),
+                                remaining_time_seconds=0,
+                                price_found=True,
+                                details="Result processed"
+                            )
+                            final_results[url_str] = UrlResult(
+                                result=product_info,
+                                request_status=status
+                            )
+                            continue
+
+            # Need to make new request
+            scraper = SUPPORTED_STORES[store_name]()
+            api_response = await scraper._start_scraper_job(url_str)
+            job_id = api_response.get('id')
+            
+            if not job_id:
+                status = RequestStatus(
+                    status='failed',
+                    start_time=now,
+                    elapsed_time_seconds=0,
+                    remaining_time_seconds=0,
+                    price_found=False,
+                    error_message="Failed to get job ID",
+                    details="Failed to start scraper job"
+                )
+                final_results[url_str] = UrlResult(
+                    result=None,
+                    request_status=status
+                )
+                continue
+
+            # Save to request cache
+            cache_entry = RequestCache(
+                store=store_name,
+                url=url_str,
+                job_id=job_id,
+                status='pending',
+                start_time=now,
+                update_time=now
+            )
+            db.add(cache_entry)
+            db.commit()
+
+            # Wait up to 1 minute for result
+            start_wait = time.time()
+            while (time.time() - start_wait) < 60:
+                status_response = await scraper._check_job_status(job_id)
+                if status_response.get('status') == 'finished':
+                    html = status_response.get('response', {}).get('body')
+                    if html:
+                        product_info = await scraper.extract_product_info(html, url_str)
+                        if product_info:
+                            product_info['timestamp'] = now
+                            cache_results(db, {url_str: product_info})
+                            status = RequestStatus(
+                                status='completed',
+                                job_id=job_id,
+                                start_time=cache_entry.start_time,
+                                elapsed_time_seconds=(time.time() - start_wait),
+                                remaining_time_seconds=0,
+                                price_found=True,
+                                details="Result processed"
+                            )
+                            final_results[url_str] = UrlResult(
+                                result=product_info,
+                                request_status=status
+                            )
+                            break
+                await asyncio.sleep(5)
+            else:
+                # Timeout reached
+                cache_entry.status = 'failed'
+                cache_entry.error_message = "Timeout waiting for result"
+                db.commit()
+                
+                status = RequestStatus(
+                    status='failed',
+                    job_id=job_id,
+                    start_time=cache_entry.start_time,
+                    elapsed_time_seconds=60,
+                    remaining_time_seconds=0,
+                    price_found=False,
+                    error_message="Timeout waiting for result",
+                    details="Request timed out after 60 seconds"
+                )
+                final_results[url_str] = UrlResult(
+                    result=None,
+                    request_status=status
+                )
+
+        return PriceResponse(results=final_results)
         
         logger.info(f"Creating scraper for store: {store_name}")
         scraper_class = SUPPORTED_STORES.get(store_name)
