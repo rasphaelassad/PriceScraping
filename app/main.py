@@ -32,8 +32,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+# Serve static files and handle SPA routing
+app.mount("/assets", StaticFiles(directory="app/static/dist/assets"), name="assets")
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    return FileResponse("app/static/dist/index.html")
 
 # Include routers
 app.include_router(health.router)
