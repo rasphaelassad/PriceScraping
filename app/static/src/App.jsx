@@ -1,48 +1,49 @@
 
 import React, { useState } from 'react';
-import { Container, Typography, Box, Button, TextField, IconButton } from '@mui/material';
+import { Container, Typography, Box, Button, TextField, IconButton, MenuItem, Select, Paper, Grid } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 
 const SUPPORTED_STORES = ['walmart', 'chefstore', 'albertsons', 'costco'];
 
 function App() {
-  const [products, setProducts] = useState([
-    { id: 1, name: '', urls: {} }
-  ]);
+  const [products, setProducts] = useState([]);
+  const [newProductName, setNewProductName] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState('');
+  const [selectedStore, setSelectedStore] = useState('');
+  const [newProductUrl, setNewProductUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState({});
 
   const addProduct = () => {
-    setProducts([...products, { 
-      id: Date.now(), 
-      name: '', 
-      urls: {}
-    }]);
+    if (newProductName) {
+      setProducts([...products, { id: Date.now(), name: newProductName, urls: {} }]);
+      setNewProductName('');
+    }
+  };
+
+  const addUrlToStore = () => {
+    if (selectedProduct && selectedStore && newProductUrl) {
+      setProducts(products.map(p => {
+        if (p.id === parseInt(selectedProduct)) {
+          return {
+            ...p,
+            urls: { ...p.urls, [selectedStore]: newProductUrl }
+          };
+        }
+        return p;
+      }));
+      setNewProductUrl('');
+      setSelectedStore('');
+    }
   };
 
   const removeProduct = (id) => {
     setProducts(products.filter(p => p.id !== id));
-  };
-
-  const updateProduct = (id, field, value) => {
-    setProducts(products.map(p => {
-      if (p.id === id) {
-        return { ...p, [field]: value };
-      }
-      return p;
-    }));
-  };
-
-  const updateUrl = (productId, store, url) => {
-    setProducts(products.map(p => {
-      if (p.id === productId) {
-        return { 
-          ...p, 
-          urls: { ...p.urls, [store]: url }
-        };
-      }
-      return p;
-    }));
+    setResults(prevResults => {
+      const newResults = { ...prevResults };
+      delete newResults[id];
+      return newResults;
+    });
   };
 
   const scrapeAll = async () => {
@@ -52,14 +53,14 @@ function App() {
     for (const store of SUPPORTED_STORES) {
       const urls = products
         .filter(p => p.urls[store])
-        .map(p => ({ 
+        .map(p => ({
           productId: p.id,
           url: p.urls[store]
         }));
 
       if (urls.length > 0) {
         try {
-          const response = await fetch('http://localhost:8000/get-prices', {
+          const response = await fetch('http://0.0.0.0:8000/get-prices', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -91,56 +92,106 @@ function App() {
         Price Comparison Tool
       </Typography>
 
+      <Paper elevation={3} sx={{ p: 3, mb: 4 }}>
+        <Grid container spacing={3}>
+          <Grid item xs={12}>
+            <Typography variant="h6" gutterBottom>
+              Add New Product
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <TextField
+                label="Product Name"
+                value={newProductName}
+                onChange={(e) => setNewProductName(e.target.value)}
+                fullWidth
+              />
+              <Button variant="contained" onClick={addProduct}>
+                Add Product
+              </Button>
+            </Box>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Typography variant="h6" gutterBottom>
+              Add Store URL
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <Select
+                value={selectedProduct}
+                onChange={(e) => setSelectedProduct(e.target.value)}
+                displayEmpty
+                fullWidth
+              >
+                <MenuItem value="" disabled>Select Product</MenuItem>
+                {products.map((product) => (
+                  <MenuItem key={product.id} value={product.id}>{product.name}</MenuItem>
+                ))}
+              </Select>
+              <Select
+                value={selectedStore}
+                onChange={(e) => setSelectedStore(e.target.value)}
+                displayEmpty
+                fullWidth
+              >
+                <MenuItem value="" disabled>Select Store</MenuItem>
+                {SUPPORTED_STORES.map((store) => (
+                  <MenuItem key={store} value={store}>
+                    {store.charAt(0).toUpperCase() + store.slice(1)}
+                  </MenuItem>
+                ))}
+              </Select>
+              <TextField
+                label="Store URL"
+                value={newProductUrl}
+                onChange={(e) => setNewProductUrl(e.target.value)}
+                fullWidth
+              />
+              <Button variant="contained" onClick={addUrlToStore}>
+                Add URL
+              </Button>
+            </Box>
+          </Grid>
+        </Grid>
+      </Paper>
+
       {products.map((product) => (
-        <Box key={product.id} sx={{ mb: 4, p: 2, border: '1px solid #ddd', borderRadius: 1 }}>
+        <Paper key={product.id} elevation={2} sx={{ mb: 3, p: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-            <TextField
-              label="Product Name"
-              value={product.name}
-              onChange={(e) => updateProduct(product.id, 'name', e.target.value)}
-              sx={{ flexGrow: 1, mr: 2 }}
-            />
+            <Typography variant="h6" sx={{ flexGrow: 1 }}>{product.name}</Typography>
             <IconButton onClick={() => removeProduct(product.id)} color="error">
               <DeleteIcon />
             </IconButton>
           </Box>
 
-          {SUPPORTED_STORES.map((store) => (
-            <TextField
-              key={store}
-              label={`${store.charAt(0).toUpperCase() + store.slice(1)} URL`}
-              value={product.urls[store] || ''}
-              onChange={(e) => updateUrl(product.id, store, e.target.value)}
-              fullWidth
-              sx={{ mb: 1 }}
-            />
-          ))}
-
-          {results[product.id] && (
-            <Box sx={{ mt: 2 }}>
-              <Typography variant="h6">Results:</Typography>
-              {Object.entries(results[product.id]).map(([store, result]) => (
-                <Box key={store} sx={{ ml: 2 }}>
-                  <Typography>
-                    {store}: ${result?.result?.price || 'N/A'}
+          <Grid container spacing={2}>
+            {SUPPORTED_STORES.map((store) => (
+              <Grid item xs={12} sm={6} key={store}>
+                <Typography variant="subtitle2">
+                  {store.charAt(0).toUpperCase() + store.slice(1)}:
+                </Typography>
+                <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+                  {product.urls[store] || 'No URL added'}
+                </Typography>
+                {results[product.id]?.hasOwnProperty(store) && (
+                  <Typography color="primary">
+                    Price: ${results[product.id][store]?.result?.price || 'N/A'}
                   </Typography>
-                </Box>
-              ))}
-            </Box>
-          )}
-        </Box>
+                )}
+              </Grid>
+            ))}
+          </Grid>
+        </Paper>
       ))}
 
-      <Box sx={{ mt: 2 }}>
-        <Button variant="outlined" onClick={addProduct} sx={{ mr: 2 }}>
-          Add Product
-        </Button>
-        <Button 
-          variant="contained" 
+      <Box sx={{ mt: 4 }}>
+        <Button
+          variant="contained"
           onClick={scrapeAll}
           disabled={loading}
+          size="large"
+          fullWidth
         >
-          {loading ? 'Scraping...' : 'Scrape All'}
+          {loading ? 'Scraping...' : 'Scrape All Prices'}
         </Button>
       </Box>
     </Container>
