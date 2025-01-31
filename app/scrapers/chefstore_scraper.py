@@ -1,6 +1,7 @@
+
 from parsel import Selector
 from .base_scraper import BaseScraper, logger
-from typing import Dict
+from typing import Dict, Optional
 import json
 
 class ChefStoreScraper(BaseScraper):
@@ -18,29 +19,30 @@ class ChefStoreScraper(BaseScraper):
             }
         }
 
+    def _extract_json_ld(self, html: str) -> Optional[Dict]:
+        """Extract JSON-LD data from HTML"""
+        try:
+            selector = Selector(text=html)
+            scripts = selector.css('script[type="application/ld+json"]::text').get()
+            return json.loads(scripts) if scripts else None
+        except Exception as e:
+            logger.error(f"Error extracting JSON-LD: {str(e)}")
+            return None
+
     async def extract_product_info(self, html: str, url: str) -> Dict:
         try:
             logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)
             
-            # Get JSON-LD script content
-            scripts = selector.css('script[type="application/ld+json"]::text').get()
-            if not scripts:
+            data = self._extract_json_ld(html)
+            if not data:
                 logger.error("Could not find JSON-LD script in HTML")
                 return None
             
-            logger.info("Found JSON-LD script, parsing JSON")
-            data = json.loads(scripts)
-            
-            # Extract store information
             store_link = selector.css('a.store-address-link::attr(href)').get()
-            try:
-                store_id = store_link.split('/')[-2] if store_link else None
-            except (IndexError, AttributeError):
-                store_id = None
+            store_id = store_link.split('/')[-2] if store_link else None
             store_address = selector.css('a.store-address-link::text').get()
             
-            # Extract price from offers
             price = None
             if "offers" in data:
                 if isinstance(data["offers"], dict):

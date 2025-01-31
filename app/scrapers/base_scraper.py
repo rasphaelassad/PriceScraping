@@ -1,3 +1,4 @@
+
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Literal
 import logging
@@ -6,10 +7,8 @@ import time
 import os
 import asyncio
 import json
-from bs4 import BeautifulSoup
-from parsel import Selector
-from dotenv import load_dotenv
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -29,29 +28,16 @@ class BaseScraper(ABC):
         """Return scraper configuration for the specific store"""
         pass
 
-    def _extract_json_ld(self, html: str) -> Optional[Dict]:
-        """Extract JSON-LD data from HTML"""
-        try:
-            selector = Selector(text=html)
-            scripts = selector.css('script[type="application/ld+json"]::text').get()
-            return json.loads(scripts) if scripts else None
-        except Exception as e:
-            logger.error(f"Error extracting JSON-LD: {str(e)}")
-            return None
-
     def _extract_next_data(self, html: str) -> Optional[Dict]:
         """Extract __NEXT_DATA__ from HTML"""
         try:
+            from parsel import Selector
             selector = Selector(text=html)
             scripts = selector.css("script#__NEXT_DATA__::text").get()
             return json.loads(scripts) if scripts else None
         except Exception as e:
             logger.error(f"Error extracting __NEXT_DATA__: {str(e)}")
             return None
-
-    def _get_soup(self, html: str) -> BeautifulSoup:
-        """Get BeautifulSoup object from HTML"""
-        return BeautifulSoup(html, 'html.parser')
 
     def _extract_price_with_regex(self, text: str) -> Optional[float]:
         """Extract price from text using regex"""
@@ -65,18 +51,14 @@ class BaseScraper(ABC):
         pass
 
     async def get_raw_content(self, urls: List[str]) -> Dict[str, Dict]:
-        """Get raw HTML/JSON content for URLs without processing
-        Returns a dictionary with URLs as keys and dictionaries containing content/error and timestamp as values
-        """
+        """Get raw HTML/JSON content for URLs without processing"""
         url_strings = [str(url) for url in urls]
         results = {}
 
         async with httpx.AsyncClient(verify=False) as client:
             if self.mode == "batch":
-                # Use batch processing for multiple URLs
                 results = await self._get_raw_batch(url_strings, client)
             else:
-                # Process URLs individually
                 tasks = [self._get_raw_single(url, client) for url in url_strings]
                 task_results = await asyncio.gather(*tasks)
                 results = dict(zip(url_strings, task_results))
@@ -86,7 +68,6 @@ class BaseScraper(ABC):
     async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
         """Get raw content for a single URL"""
         try:
-            # Submit job to ScraperAPI
             api_url = "https://async.scraperapi.com/jobs"
             payload = {
                 "url": url,
@@ -111,10 +92,8 @@ class BaseScraper(ABC):
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
 
-            # Poll for job completion
             start_time = time.time()
             while True:
-                # Check timeout
                 if (time.time() - start_time) / 60 >= self.TIMEOUT_MINUTES:
                     return {
                         "error": "Job timed out",
@@ -143,7 +122,7 @@ class BaseScraper(ABC):
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }
 
-                await asyncio.sleep(5)  # Wait before next poll
+                await asyncio.sleep(5)
 
         except Exception as e:
             return {
@@ -154,7 +133,6 @@ class BaseScraper(ABC):
     async def _get_raw_batch(self, urls: List[str], client: httpx.AsyncClient) -> Dict[str, Dict]:
         """Get raw content for multiple URLs using batch processing"""
         try:
-            # Submit batch job
             api_url = "https://async.scraperapi.com/batchjobs"
             payload = {
                 "urls": urls,
@@ -174,10 +152,8 @@ class BaseScraper(ABC):
             results = {}
             start_time = time.time()
 
-            # Poll for all jobs completion
             while any(status['status'] == 'running' for status in job_statuses.values()):
                 if (time.time() - start_time) / 60 >= self.TIMEOUT_MINUTES:
-                    # Handle timeout for remaining jobs
                     for job_info in job_statuses.values():
                         if job_info['status'] == 'running':
                             results[job_info['url']] = {
@@ -214,7 +190,6 @@ class BaseScraper(ABC):
 
                 await asyncio.sleep(5)
 
-            # Fill in any missing results
             for url in urls:
                 if url not in results:
                     results[url] = {
@@ -235,7 +210,6 @@ class BaseScraper(ABC):
         if not product_info:
             return None
 
-        # Ensure all required fields are present with proper types
         standardized = {
             "store": str(product_info.get("store", "")),
             "url": str(product_info.get("url", "")),
@@ -256,11 +230,9 @@ class BaseScraper(ABC):
 
     async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
         """Get product information for multiple URLs"""
-        # First get the raw content
         raw_results = await self.get_raw_content(urls)
-
-        # Process the raw content to extract product information
         processed_results = {}
+        
         for url, result in raw_results.items():
             if "content" in result:
                 try:
