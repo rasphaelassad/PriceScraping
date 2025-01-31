@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:3000/api"
 
 def test_health():
     response = requests.get(f"{BASE_URL}/health")

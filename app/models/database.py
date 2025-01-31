@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, create
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
-from typing import Optional
 import os
 
 # Create the database directory if it doesn't exist
@@ -17,6 +16,14 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Create base class for models
 Base = declarative_base()
+
+# Add get_db function
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class Product(Base):
     __tablename__ = "product"
@@ -111,4 +118,4 @@ class PendingRequest(Base):
     timestamp = Column(DateTime, default=datetime.now)
 
 # Create all tables
-Base.metadata.create_all(bind=engine) 
+Base.metadata.create_all(bind=engine)
