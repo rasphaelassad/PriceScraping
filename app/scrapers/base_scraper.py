@@ -12,18 +12,6 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from .walmart_scraper import WalmartScraper
-from .costco_scraper import CostcoScraper
-from .chefstore_scraper import ChefStoreScraper
-from .albertsons_scraper import AlbertsonsScraper
-
-SUPPORTED_STORES = {
-    "walmart": WalmartScraper,
-    "costco": CostcoScraper,
-    "chefstore": ChefStoreScraper,
-    "albertsons": AlbertsonsScraper
-}
-
 class BaseScraper(ABC):
     API_KEY = os.environ["SCRAPER_API_KEY"]
     TIMEOUT_MINUTES = 1  # Reduced timeout
