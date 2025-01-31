@@ -1,8 +1,9 @@
 
+const { useState } = React;
 const { Container, Typography, Box, Button, TextField, Paper, Grid } = MaterialUI;
 
 function App() {
-  const [value, setValue] = React.useState('');
+  const [value, setValue] = useState('');
 
   return (
     <Container>
@@ -15,3 +16,6 @@ function App() {
     </Container>
   );
 }
+
+// Export the App component
+window.App = App;
