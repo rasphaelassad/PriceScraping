@@ -13,27 +13,11 @@ localPort = 3000
 externalPort = 80
 
 [[ports]]
-localPort = 3001
-externalPort = 3001
-
-[[ports]]
-localPort = 3002
-externalPort = 3002
-
-[[ports]]
-localPort = 5173
-externalPort = 5173
-
-[[ports]]
-localPort = 5174
-externalPort = 3000
-
-[[ports]]
 localPort = 8000
 externalPort = 8000
 
 [workflows]
-runButton = "FastAPI"
+runButton = "Full App"
 
 [[workflows.workflow]]
 name = "FastAPI"
@@ -42,3 +26,12 @@ author = 38842561
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "uvicorn app.main:app --host 0.0.0.0"
+
+[[workflows.workflow]]
+name = "Full App"
+mode = "sequential"
+author = 38842561
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev & python run.py"
