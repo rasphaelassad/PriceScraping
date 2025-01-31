@@ -11,3 +11,14 @@ run = ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 3000"]
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[workflows]
+runButton = "FastAPI"
+
+[[workflows.workflow]]
+name = "FastAPI"
+author = 38842561
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "uvicorn app.main:app --host 0.0.0.0"
