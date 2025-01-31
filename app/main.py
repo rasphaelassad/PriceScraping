@@ -231,19 +231,18 @@ def get_table_data(table_name: str, db: Session = Depends(get_db)) -> Dict[str, 
     Get all data from a specified database table.
     Currently supports: 'product' and 'pending_request' tables.
     """
-    try:
-        # Get the table class based on name
-        table_map = {
-            "product": Product,
-            "pending_request": PendingRequest
-        }
-        
-        if table_name not in table_map:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Table '{table_name}' not found. Available tables: {', '.join(table_map.keys())}"
-            )
+    # Get the table class based on name
+    table_map = {
+        "product": Product,
+        "pending_request": PendingRequest
+    }
     
+    if table_name not in table_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Table '{table_name}' not found. Available tables: {', '.join(table_map.keys())}"
+        )
+
     try:
         # Query all records from the table
         records = db.query(table_map[table_name]).all()
