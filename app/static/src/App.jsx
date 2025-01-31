@@ -1,8 +1,4 @@
 
-import React, { useState } from 'react';
-import { Container, Typography, Box, Button, TextField, IconButton, MenuItem, Select, Paper, Grid } from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete';
-
 const SUPPORTED_STORES = ['walmart', 'chefstore', 'albertsons', 'costco'];
 
 function App() {
@@ -60,7 +56,7 @@ function App() {
 
       if (urls.length > 0) {
         try {
-          const response = await fetch('http://0.0.0.0:3000/api/get-prices', {
+          const response = await fetch('/api/get-prices', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -197,5 +193,3 @@ function App() {
     </Container>
   );
 }
-
-export default App;

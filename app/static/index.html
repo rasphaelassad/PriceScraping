@@ -7,17 +7,19 @@
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/@mui/material@5.14.7/umd/material-ui.development.js" crossorigin></script>
-    <script src="https://unpkg.com/@mui/icons-material@5.14.7/index.js" crossorigin></script>
+    <script src="https://unpkg.com/@emotion/react@11.11.1/dist/emotion-react.umd.min.js"></script>
+    <script src="https://unpkg.com/@mui/material@5.14.7/umd/material-ui.production.min.js"></script>
+    <script src="https://unpkg.com/@mui/icons-material@5.14.7/index.js"></script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="text/babel" data-type="module">
+    <script type="text/babel">
+      const { useState } = React;
       const { 
         Container, Typography, Box, Button, TextField, IconButton, 
         MenuItem, Select, Paper, Grid 
       } = MaterialUI;
-      const { DeleteIcon } = MaterialUIIcons;
+      const DeleteIcon = MaterialUIIcons.Delete;
     </script>
     <script type="text/babel" src="/src/App.jsx"></script>
     <script type="text/babel" src="/src/main.jsx"></script>
