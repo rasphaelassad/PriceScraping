@@ -31,8 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# Static files - serve the built frontend
+app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 
 # Store configurations
 SUPPORTED_STORES = {
