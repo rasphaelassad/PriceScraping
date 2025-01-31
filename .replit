@@ -17,7 +17,7 @@ localPort = 8000
 externalPort = 8000
 
 [workflows]
-runButton = "Run"
+runButton = "Clean All"
 
 [[workflows.workflow]]
 name = "Run"
