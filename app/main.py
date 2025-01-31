@@ -33,19 +33,14 @@ app.add_middleware(
 )
 
 # Serve static files and handle SPA routing
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/src", StaticFiles(directory="app/static/src"), name="src")
+app.mount("/", StaticFiles(directory="app/static", html=True), name="root")
 
-@app.get("/")
-async def serve_root():
-    return FileResponse("app/static/index.html")
-
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    if full_path.startswith("api/"):
-        raise HTTPException(status_code=404)
-    elif full_path.startswith("src/"):
-        return FileResponse(f"app/static/{full_path}")
-    return FileResponse("app/static/index.html")
+@app.exception_handler(404)
+async def custom_404_handler(request, exc):
+    if not request.url.path.startswith("/api/"):
+        return FileResponse("app/static/index.html")
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
 
 # Include routers
 app.include_router(health.router)
