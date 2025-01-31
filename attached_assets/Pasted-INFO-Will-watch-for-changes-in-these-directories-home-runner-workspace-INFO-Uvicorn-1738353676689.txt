@@ -1,6 +1,6 @@
 INFO:     Will watch for changes in these directories: ['/home/runner/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:3000 (Press CTRL+C to quit)
-INFO:     Started reloader process [9603] using StatReload
+INFO:     Started reloader process [10369] using StatReload
 Process SpawnProcess-1:
 Traceback (most recent call last):
   File "/nix/store/nb21sc3npfc8gvazwnrjxpvb5d48jysx-python3-3.12.7/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
@@ -38,10 +38,9 @@ Traceback (most recent call last):
   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
   File "<frozen importlib._bootstrap_external>", line 995, in exec_module
   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
-  File "/home/runner/workspace/app/main.py", line 18, in <module>
-    from app.routes import health, stores
-  File "/home/runner/workspace/app/routes/__init__.py", line 2, in <module>
-    from . import health, stores
-  File "/home/runner/workspace/app/routes/stores.py", line 6, in <module>
-    from app.scrapers.base_scraper import SUPPORTED_STORES
-ImportError: cannot import name 'SUPPORTED_STORES' from 'app.scrapers.base_scraper' (/home/runner/workspace/app/scrapers/base_scraper.py)
+  File "/home/runner/workspace/app/main.py", line 36, in <module>
+    app.mount("/assets", StaticFiles(directory="app/static/dist/assets"), name="assets")
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/starlette/staticfiles.py", line 57, in __init__
+    raise RuntimeError(f"Directory '{directory}' does not exist")
+RuntimeError: Directory 'app/static/dist/assets' does not exist
