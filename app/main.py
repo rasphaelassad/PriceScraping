@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.schemas.request_schemas import PriceRequest, PriceResponse, ProductInfo, RequestStatus, UrlResult
 from app.scrapers.costco_scraper import CostcoScraper
 from app.scrapers.walmart_scraper import WalmartScraper
@@ -39,9 +41,11 @@ def get_db():
     finally:
         db.close()
 
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
 @app.get("/")
-def hello_world():
-    return {'message': 'Hello from FastAPI'}
+def serve_spa():
+    return FileResponse("app/static/index.html")
 
 SUPPORTED_STORES = {
     "walmart": WalmartScraper,
