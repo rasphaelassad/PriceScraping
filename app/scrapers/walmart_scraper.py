@@ -1,4 +1,4 @@
-import json
+
 from parsel import Selector
 from .base_scraper import BaseScraper, logger
 from typing import Dict
@@ -18,10 +18,13 @@ class WalmartScraper(BaseScraper):
 
     async def extract_product_info(self, html: str, url: str) -> Dict:
         try:
-            data = self._extract_next_data(html)
-            if not data:
+            selector = Selector(text=html)
+            next_data = selector.css("script#__NEXT_DATA__::text").get()
+            if not next_data:
                 return None
 
+            import json
+            data = json.loads(next_data)
             product = (
                 data.get("props", {})
                     .get("pageProps", {})
@@ -31,16 +34,13 @@ class WalmartScraper(BaseScraper):
             )
 
             price_info = product.get("priceInfo", {}).get("unitPrice", {})
-
-            result = {
+            return {
                 "store": "walmart",
                 "url": url,
                 "name": product.get("name"),
                 "price": float(price_info.get("price")) if price_info.get("price") else None,
                 "price_string": price_info.get("priceString")
             }
-
-            return result
         except Exception as e:
             logger.error(f"Error parsing Walmart product info: {str(e)}")
             return None
