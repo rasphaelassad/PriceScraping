@@ -7,6 +7,7 @@ import os
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from app.core.config import get_settings
 from app.schemas.request_schemas import ensure_utc_datetime, ProductInfo
 from app.core.cache_manager import CacheManager
@@ -29,6 +30,7 @@ class BaseScraper(ABC):
 
     INITIAL_WAIT = 60  # Initial wait time of 1 minute
     TIMEOUT_MINUTES = 15  # Maximum timeout of 15 minutes
+    MAX_ACTIVE_JOBS = 1000  # Maximum number of active jobs to prevent memory leaks
     
     def __init__(self, mode: Literal["batch", "async"] = "batch"):
         """
@@ -44,7 +46,81 @@ class BaseScraper(ABC):
         self.batch_url = "https://async.scraperapi.com/batchjobs"
         self.store_name = None
         self._active_jobs = {}  # Store active jobs by URL
+        self._job_cleanup_time = time.time()  # Track last cleanup time
         logger.info(f"Initialized {self.__class__.__name__} in {mode} mode")
+
+    def _validate_url(self, url: str) -> bool:
+        """Validate URL format and domain"""
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
+
+    def _cleanup_old_jobs(self) -> None:
+        """Clean up old jobs to prevent memory leaks"""
+        current_time = time.time()
+        # Only clean up every 5 minutes
+        if current_time - self._job_cleanup_time < 300:
+            return
+            
+        self._job_cleanup_time = current_time
+        expired_urls = []
+        
+        for url, job_info in self._active_jobs.items():
+            if current_time - job_info['start_time'] > self.TIMEOUT_MINUTES * 60:
+                expired_urls.append(url)
+                
+        for url in expired_urls:
+            self._active_jobs.pop(url, None)
+            logger.info(f"Cleaned up expired job for URL: {url}")
+
+    async def get_raw_content(self, urls: List[str]) -> Dict[str, Dict]:
+        """Get raw HTML/JSON content for URLs without processing"""
+        # Validate URLs and convert to strings
+        validated_urls = []
+        invalid_urls = {}
+        
+        for url in urls:
+            url_str = str(url)
+            if self._validate_url(url_str):
+                validated_urls.append(url_str)
+            else:
+                invalid_urls[url_str] = {
+                    "error": "Invalid URL format",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+        
+        # Clean up old jobs before processing new ones
+        self._cleanup_old_jobs()
+        
+        # Check if we have too many active jobs
+        if len(self._active_jobs) >= self.MAX_ACTIVE_JOBS:
+            error_msg = "Too many active jobs, try again later"
+            return {url: {
+                "error": error_msg,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            } for url in validated_urls} | invalid_urls
+        
+        results = {}
+        
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                if self.mode == "batch":
+                    results = await self._get_raw_batch(validated_urls, client)
+                else:
+                    tasks = [self._get_raw_single(url, client) for url in validated_urls]
+                    task_results = await asyncio.gather(*tasks)
+                    results = dict(zip(validated_urls, task_results))
+            except Exception as e:
+                logger.error(f"Error in get_raw_content: {str(e)}")
+                results = {url: {
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                } for url in validated_urls}
+                
+        # Combine results with invalid URLs
+        return results | invalid_urls
 
     @abstractmethod
     def get_scraper_config(self) -> Dict:
@@ -71,28 +147,6 @@ class BaseScraper(ABC):
             Dict: Extracted product information
         """
         pass
-
-    async def get_raw_content(self, urls: List[str]) -> Dict[str, Dict]:
-        """Get raw HTML/JSON content for URLs without processing"""
-        url_strings = [str(url) for url in urls]
-        results = {}
-        
-        async with httpx.AsyncClient(verify=False) as client:
-            try:
-                if self.mode == "batch":
-                    results = await self._get_raw_batch(url_strings, client)
-                else:
-                    tasks = [self._get_raw_single(url, client) for url in url_strings]
-                    task_results = await asyncio.gather(*tasks)
-                    results = dict(zip(url_strings, task_results))
-            except Exception as e:
-                logger.error(f"Error in get_raw_content: {str(e)}")
-                results = {url: {
-                    "error": str(e),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                } for url in url_strings}
-                
-        return results
 
     async def _get_raw_single(self, url: str, client: httpx.AsyncClient) -> Dict:
         """Get raw content for a single URL"""

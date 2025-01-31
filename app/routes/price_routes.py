@@ -59,10 +59,7 @@ async def get_prices(request: PriceRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/raw-content")
-async def get_raw_content(
-    request: PriceRequest,
-    db: Session = Depends(get_db)
-):
+async def get_raw_content(request: PriceRequest,db: Session = Depends(get_db)):
     """
     Get raw HTML/JSON response without processing.
     

@@ -1,30 +1,17 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List
 import json
 import logging
-import traceback
-from datetime import datetime, timezone
 from .base_scraper import BaseScraper
-import asyncio
-from fastapi import HTTPException
-import aiohttp
-from app.core.config import get_settings
-import uuid
-from bs4 import BeautifulSoup
-import re
-import httpx
 
 logger = logging.getLogger(__name__)
 
 class AlbertsonsScraper(BaseScraper):
-    """Scraper implementation for Albertsons."""
-
-    def __init__(self, mode: str = "batch"):
-        """Initialize the scraper in async mode."""
-        super().__init__(mode)
-        self.store_name = "albertsons"
+    def __init__(self):
+        super().__init__(mode="async")  # Use async parallel mode instead of batch
+        self.store_name = "albertsons"  # Set store name in lowercase to match database entries
     
     def get_scraper_config(self) -> Dict:
-        """Return scraper configuration for Albertsons."""
+        """Return scraper configuration for Albertsons"""
         return {
             "headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -36,96 +23,77 @@ class AlbertsonsScraper(BaseScraper):
             "keepHeaders": True
         }
 
-
-    def transform_url(self, url: str) -> str:
-        """Transform Albertsons product URL to API URL."""
+    async def extract_product_info(self, html: str, url: str) -> Dict:
+        """Extract product information from Albertsons API response"""
         try:
-            # Extract product ID from URL
-            match = re.search(r'product-details\.(\d+)\.html', url)
-            if not match:
-                logger.error(f"Could not extract product ID from URL: {url}")
-                return url
-                
-            product_id = match.group(1)
-            store_id = "177"  # Default store ID for now
-            api_url = f"https://www.albertsons.com/abs/pub/xapi/pgm/v1/product/{product_id}/channel/instore/store/{store_id}"
-            logger.info(f"Transformed URL {url} to {api_url}")
-            return api_url
-            
-        except Exception as e:
-            logger.error(f"Error transforming URL {url}: {str(e)}")
-            return url
-
-    async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
-        """Extract product information from API response."""
-        try:
-            # Parse JSON response
+            # Parse the JSON response
             data = json.loads(html)
             
-            if not data:
-                logger.error("Empty response from API")
+            # Get the product from catalog response
+            product = data.get('catalog', {}).get('response', {}).get('docs', [{}])[0]
+            if not product:
+                logger.error("No product found in catalog response")
                 return None
             
-            # Extract store info from URL
-            store_match = re.search(r'/store/(\d+)/', url)
-            store_id = store_match.group(1) if store_match else None
-            
-            # Extract price info
-            price = None
-            price_string = None
-            price_per_unit = None
-            price_per_unit_string = None
-            
-            if "items" in data and len(data["items"]) > 0:
-                item = data["items"][0]
-                
-                # Regular price
-                if "price" in item:
-                    try:
-                        price = float(item["price"]["regular"])
-                        price_string = f"${price:.2f}"
-                    except (KeyError, ValueError) as e:
-                        logger.warning(f"Error extracting regular price: {e}")
-                
-                # Price per unit
-                if "pricePer" in item:
-                    try:
-                        price_per_unit = float(item["pricePer"]["price"])
-                        unit = item["pricePer"]["unit"]
-                        price_per_unit_string = f"${price_per_unit:.2f}/{unit}"
-                    except (KeyError, ValueError) as e:
-                        logger.warning(f"Error extracting price per unit: {e}")
-                
-                # Get original URL from the transformed URL if needed
-                original_url = url
-                if '/xapi/pgm/v1/product/' in url:
-                    product_id = re.search(r'/product/(\d+)/', url)
-                    if product_id:
-                        original_url = f"https://www.albertsons.com/shop/product-details.{product_id.group(1)}.html"
-                
-                # Build product info
-                return {
-                    "store": "albertsons",
-                    "url": original_url,  # Always use the original product URL
-                    "name": item.get("name", ""),
-                    "price": price,
-                    "price_string": price_string,
-                    "price_per_unit": price_per_unit,
-                    "price_per_unit_string": price_per_unit_string,
-                    "store_id": store_id,
-                    "store_address": None,  # Not available in API response
-                    "store_zip": None,  # Not available in API response
-                    "brand": item.get("brand", {}).get("name", None),
-                    "sku": item.get("upc", None),
-                    "category": item.get("categories", [None])[0]
-                }
-            
-            logger.error("No items found in API response")
-            return None
-            
+            # Build the standardized product information
+            product_info = {
+                "store": "Albertsons",
+                "url": f"https://www.albertsons.com/shop/product-details.{product.get('pid')}.html",
+                "name": product.get('name'),
+                "price": float(product.get('price', 0)),
+                "price_string": f"${product.get('price', '0')}",
+                "price_per_unit": float(product.get('pricePer', 0)) if product.get('pricePer') else None,
+                "price_per_unit_string": f"${product.get('pricePer', '0')}/Lb" if product.get('pricePer') else None,
+                "store_id": product.get('storeId'),
+                "store_address": None,  # Not available in this API response
+                "store_zip": None,  # Not available in this API response
+                "brand": None,  # Not directly available in this response
+                "sku": product.get('pid'),
+                "category": f"{product.get('departmentName', '')}/{product.get('shelfName', '')}"
+            }
+
+            logger.info(f"Successfully extracted product info: {product_info}")
+            return product_info
+
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {str(e)}")
+            logger.error(f"Failed to parse JSON response: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error extracting product info: {str(e)}")
+            logger.error(f"Error extracting product info: {e}")
             return None
+
+    def transform_url(self, url) -> str:
+        """Transform product detail URL to API URL"""
+        # Convert Pydantic Url to string
+        url = str(url)
+        
+        if "product-details." in url:
+            # Extract product ID from URL
+            product_id = url.split("product-details.")[-1].split(".")[0]
+            # Transform to API URL format
+            return f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id}&banner=albertsons&storeId=177"
+        return url
+
+    async def get_prices(self, urls: List[str]) -> Dict[str, Dict]:
+        """Override to transform URLs before processing"""
+        # Store original URLs
+        original_urls = [str(url) for url in urls]
+        
+        # Transform URLs to API format
+        api_urls = [self.transform_url(url) for url in urls]
+        
+        # Call parent implementation with transformed URLs
+        results = await super().get_prices(api_urls)
+        
+        # Map results back to original URLs
+        original_results = {}
+        for orig_url, api_url in zip(original_urls, api_urls):
+            if api_url in results and results[api_url]:
+                # Ensure the result uses the original product URL
+                result = results[api_url].copy()
+                result['url'] = orig_url
+                original_results[orig_url] = result
+            else:
+                original_results[orig_url] = None
+                
+        return original_results
