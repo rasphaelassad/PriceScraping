@@ -34,6 +34,6 @@ def test_get_prices():
 
 if __name__ == "__main__":
     print("Testing API endpoints...")
-    #test_health()
+    test_health()
     #test_supported_stores()
     #test_get_prices() 

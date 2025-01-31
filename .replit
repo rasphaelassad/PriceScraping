@@ -35,3 +35,12 @@ author = 38842561
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run dev & python run.py"
+
+[[workflows.workflow]]
+name = "Clean All"
+mode = "sequential"
+author = 38842561
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "lsof -i :3000,3001,3002,8000 | grep LISTEN | awk '{print $2}' | xargs -r kill -9"
