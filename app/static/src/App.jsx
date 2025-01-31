@@ -60,7 +60,7 @@ function App() {
 
       if (urls.length > 0) {
         try {
-          const response = await fetch('http://0.0.0.0:8000/get-prices', {
+          const response = await fetch('http://0.0.0.0:3000/get-prices', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
