@@ -1,0 +1,15 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "A FastAPI-based application that scrapes product prices from various online grocery stores and retailers. The system provides a unified API interface for retrieving product information and prices across different stores while implementing efficient caching and standardized output formats.",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
