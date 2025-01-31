@@ -42,8 +42,8 @@ async def custom_404_handler(request, exc):
         return FileResponse("app/static/index.html")
     return JSONResponse(status_code=404, content={"detail": "Not found"})
 
-# Include routers
-app.include_router(health.router)
+# Include routers with /api prefix
+app.include_router(health.router, prefix="/api")
 app.include_router(stores.router)
 
 # Store configurations
