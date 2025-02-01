@@ -15,7 +15,6 @@ class ProductInfo(BaseModel):
     brand: Optional[str] = None
     sku: Optional[str] = None
     category: Optional[str] = None
-    timestamp: Optional[datetime] = None
 
 class RequestStatus(BaseModel):
     """Status information for a scraping request."""

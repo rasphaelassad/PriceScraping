@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.routes import price_routes
+from app.api.routes import router as api_router
 from app.core.config import get_settings
 import logging
 import traceback
@@ -11,7 +11,7 @@ from datetime import datetime
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
 
-# Configure logging at the start of the file
+# Configure logging
 log_filename = f"logs/debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
 logging.basicConfig(
@@ -26,13 +26,18 @@ logging.basicConfig(
 # Set logging levels
 logging.getLogger('httpx').setLevel(logging.INFO)
 
-# Get root logger and add file handler
+# Get root logger
 logger = logging.getLogger(__name__)
 logger.info("=" * 80)
 logger.info(f"Starting application in DEBUG mode - Log file: {log_filename}")
 logger.info("=" * 80)
 
-app = FastAPI(title="Store Price API")
+# Create FastAPI app
+app = FastAPI(
+    title="Store Price API",
+    description="API for scraping product prices from various stores",
+    version="1.0.0"
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -43,8 +48,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(price_routes.router, tags=["prices"])
+# Include API routes
+app.include_router(api_router, prefix="/api/v1")
 
 # Global exception handler
 @app.exception_handler(Exception)
@@ -56,10 +61,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": str(exc)},
     )
 
-@app.get("/")
-def hello_world():
-    return {'message': 'Hello from FastAPI'}
-
+# Health check endpoint
 @app.get("/health")
 def health_check():
+    """Check if the API is healthy."""
     return {"status": "healthy"}

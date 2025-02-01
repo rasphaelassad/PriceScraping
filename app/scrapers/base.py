@@ -1,19 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Type
 import logging
 import httpx
 import asyncio
 from datetime import datetime, timezone
 import uuid
 from app.core.config import get_settings
+import re
 
 logger = logging.getLogger(__name__)
 
 class BaseScraper(ABC):
     """Base class for all store-specific scrapers."""
     
+    # Store name and URL pattern - must be set in subclasses
+    store_name: str = ""
+    url_pattern: str = ""
+    
     def __init__(self):
         """Initialize the scraper with API key and common settings."""
+        if not self.store_name or not self.url_pattern:
+            raise ValueError("Scraper must define store_name and url_pattern")
+            
         self.settings = get_settings()
         self.api_key = self.settings.scraper_api_key
         if not self.api_key:
@@ -22,6 +30,21 @@ class BaseScraper(ABC):
         self.status_url = "https://api.scraperapi.com/status"
         self.max_retries = 6  # 1 minute with 10 second intervals
         self.retry_interval = 10  # seconds
+
+    @classmethod
+    def can_handle_url(cls, url: str) -> bool:
+        """Check if this scraper can handle the given URL."""
+        if not cls.url_pattern:
+            raise NotImplementedError("url_pattern must be set in scraper subclass")
+        return bool(re.search(cls.url_pattern, url, re.IGNORECASE))
+
+    @classmethod
+    def get_scraper_for_url(cls, url: str, available_scrapers: list[Type['BaseScraper']]) -> Optional[Type['BaseScraper']]:
+        """Find the appropriate scraper class for a URL."""
+        for scraper_class in available_scrapers:
+            if scraper_class.can_handle_url(url):
+                return scraper_class
+        return None
 
     @abstractmethod
     def get_scraper_config(self) -> dict:
@@ -135,4 +158,4 @@ class BaseScraper(ABC):
                     "elapsed_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
                     "error_message": str(e)
                 }
-            }
+            } 

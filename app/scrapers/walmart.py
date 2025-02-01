@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from .base_scraper import BaseScraper
+from .base import BaseScraper
 import json
 from parsel import Selector
 import logging
@@ -7,10 +7,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 class WalmartScraper(BaseScraper):
+    """Scraper for Walmart products."""
+    
+    store_name = "walmart"
+    url_pattern = r"(?:www\.)?walmart\.com"
+    
     def get_scraper_config(self) -> dict:
         """Get Walmart-specific scraper configuration."""
         return {
-            "premium": False,
+            "premium": True,
             "country_code": "us",
             "device_type": "desktop",
             "keep_headers": True,
