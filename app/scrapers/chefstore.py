@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from .base_scraper import BaseScraper
+from .base import BaseScraper
 import json
 from parsel import Selector
 import logging
@@ -7,10 +7,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ChefStoreScraper(BaseScraper):
+    """Scraper for ChefStore products."""
+    
+    store_name = "chefstore"
+    url_pattern = r"(?:www\.)?chefstore\.com"
+    
     def get_scraper_config(self) -> dict:
         """Get ChefStore-specific scraper configuration."""
         return {
-            "premium": False,
+            "premium": True,
             "country_code": "us",
             "device_type": "desktop",
             "keep_headers": True,
@@ -57,7 +62,7 @@ class ChefStoreScraper(BaseScraper):
             store_zip = selector.css('meta[property="business:contact_data:postal_code"]::attr(content)').get()
 
             return {
-                "store": "chefstore",
+                "store": self.store_name,
                 "url": url,
                 "name": name,
                 "price": float(price) if price else None,
@@ -69,7 +74,6 @@ class ChefStoreScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-
         except Exception as e:
             logger.error(f"Error extracting product info: {e}")
             return None

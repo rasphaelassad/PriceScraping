@@ -1,29 +1,23 @@
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import json
 import logging
-from datetime import datetime, timezone
-from .base_scraper import BaseScraper
+from .base import BaseScraper
 from parsel import Selector
 import re
 
 logger = logging.getLogger(__name__)
 
 class AlbertsonsScraper(BaseScraper):
-    def __init__(self):
-        super().__init__(mode="async")  # Use async parallel mode instead of batch
-        self.store_name = "albertsons"  # Set store name in lowercase to match database entries
+    """Scraper for Albertsons products."""
+    
+    store_name = "albertsons"
+    url_pattern = r"(?:www\.)?albertsons\.com"
     
     def get_scraper_config(self) -> dict:
         """Get Albertsons-specific scraper configuration."""
         return {
-            "premium": True,
+            "render": 'false',
             "country_code": "us",
-            "device_type": "desktop",
-            "keep_headers": True,
-            "headers": {
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.5"
-            }
         }
 
     def transform_url(self, url: str) -> str:
@@ -50,7 +44,7 @@ class AlbertsonsScraper(BaseScraper):
             product = data.get("product", {})
             
             if not product:
-                logger.error("No product data found in API response")
+                logger.error("No product data found")
                 return None
 
             # Extract basic info
@@ -76,7 +70,7 @@ class AlbertsonsScraper(BaseScraper):
             category = product.get("category", {}).get("name")
 
             return {
-                "store": "albertsons",
+                "store": self.store_name,
                 "url": url,
                 "name": name,
                 "price": float(price) if price else None,
@@ -88,38 +82,6 @@ class AlbertsonsScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-
-        except Exception as e:
-            logger.error(f"Error extracting product info: {e}")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Error parsing product info: {e}")
             return None
-
-    async def get_prices(self, urls: List[str]) -> Dict[str, Optional[Dict]]:
-        """Get prices for multiple URLs"""
-        # Store original URLs
-        original_urls = [str(url) for url in urls]
-        
-        # Transform URLs to API format
-        api_urls = []
-        url_mapping = {}  # Keep track of which API URL maps to which original URL
-        
-        for url in original_urls:
-            api_url = self.transform_url(url)
-            api_urls.append(api_url)
-            url_mapping[api_url] = url
-        
-        # Call parent implementation with transformed URLs
-        results = await super().get_prices(api_urls)
-        
-        # Map results back to original URLs
-        original_results = {}
-        for orig_url in original_urls:
-            api_url = self.transform_url(orig_url)
-            if api_url in results and results[api_url]:
-                # Ensure the result uses the original product URL
-                result = results[api_url].copy()
-                result['url'] = orig_url
-                original_results[orig_url] = result
-            else:
-                original_results[orig_url] = None
-                
-        return original_results

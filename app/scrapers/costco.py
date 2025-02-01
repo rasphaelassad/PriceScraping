@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from .base_scraper import BaseScraper
+from .base import BaseScraper
 import json
 from parsel import Selector
 import logging
@@ -7,6 +7,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 class CostcoScraper(BaseScraper):
+    """Scraper for Costco products."""
+    
+    store_name = "costco"
+    url_pattern = r"(?:www\.)?costco\.com"
+    
     def get_scraper_config(self) -> dict:
         """Get Costco-specific scraper configuration."""
         return {
@@ -59,7 +64,7 @@ class CostcoScraper(BaseScraper):
             store_zip = store_info.get("address", {}).get("zipCode")
 
             return {
-                "store": "costco",
+                "store": self.store_name,
                 "url": url,
                 "name": name,
                 "price": float(price) if price else None,
@@ -71,7 +76,6 @@ class CostcoScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-
         except Exception as e:
             logger.error(f"Error extracting product info: {e}")
             return None

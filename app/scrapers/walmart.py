@@ -59,7 +59,7 @@ class WalmartScraper(BaseScraper):
             store_zip = store_info.get("address", {}).get("postalCode")
 
             return {
-                "store": "walmart",
+                "store": self.store_name,
                 "url": url,
                 "name": name,
                 "price": float(price) if price else None,

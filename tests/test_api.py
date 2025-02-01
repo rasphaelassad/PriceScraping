@@ -4,12 +4,15 @@ import logging
 import sys
 import time
 from datetime import datetime, timezone
+import pytest
+from httpx import AsyncClient
+from app.main import app
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8000/api/v1"
 
 def test_health():
     try:
@@ -160,6 +163,13 @@ def test_raw_content():
     except Exception as e:
         print(f"Raw content error: {e}")
         return False
+
+@pytest.mark.asyncio
+async def test_health():
+    async with AsyncClient(app=app, base_url="http://testserver") as client:
+        response = await client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy"}
 
 if __name__ == "__main__":
     print("Testing API endpoints...")

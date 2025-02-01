@@ -27,14 +27,3 @@ def get_scraper_for_url(url: str) -> BaseScraper:
         supported = ", ".join(get_supported_stores())
         raise ValueError(f"No scraper found for URL: {url}. Supported stores are: {supported}")
     return scraper_class()
-
-def identify_store_from_url(url: str) -> Optional[str]:
-    """Identify store from URL by trying each scraper's URL pattern."""
-    if not url:
-        return None
-        
-    for store_name, scraper_class in SCRAPERS.items():
-        if scraper_class.matches_url(url):
-            return store_name
-            
-    return None

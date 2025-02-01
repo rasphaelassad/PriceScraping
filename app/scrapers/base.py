@@ -60,102 +60,57 @@ class BaseScraper(ABC):
         """Transform URL if needed. Override in store-specific scrapers if needed."""
         return url
 
-    async def check_job_status(self, job_id: str) -> Dict[str, Any]:
-        """Check the status of a ScraperAPI job."""
-        async with httpx.AsyncClient() as client:
-            params = {
-                "api_key": self.api_key,
-                "job_id": job_id
-            }
-            response = await client.get(self.status_url, params=params)
-            return response.json()
+    async def fetch_content(self, url: str) -> Optional[str]:
+        """Fetch page content asynchronously."""
+        transformed_url = self.transform_url(url)
+        params = {
+            "api_key": self.api_key,
+            "url": transformed_url,
+            **self.get_scraper_config()
+        }
 
-    async def create_scrape_job(self, url: str) -> Dict[str, Any]:
-        """Create a new scraping job with ScraperAPI."""
         async with httpx.AsyncClient() as client:
-            config = self.get_scraper_config()
-            payload = {
-                "apiKey": self.api_key,
-                "url": self.transform_url(url),
-                **config
-            }
-            response = await client.post(self.base_url, json=payload)
-            if response.status_code != 200:
-                raise ValueError(f"Failed to create scrape job: {response.text}")
-            return response.json()
-
-    async def wait_for_completion(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Wait for a scraping job to complete."""
-        for attempt in range(self.max_retries):
-            status_data = await self.check_job_status(job_id)
-            
-            if status_data.get("status") == "finished":
-                return status_data.get("response", {})
-            elif status_data.get("status") == "failed":
-                logger.error(f"Job {job_id} failed: {status_data.get('error')}")
+            try:
+                response = await client.get(self.base_url, params=params)
+                response.raise_for_status()
+                return response.text
+            except httpx.HTTPError as e:
+                logger.error(f"HTTP error while fetching {url}: {e}")
                 return None
-                
-            await asyncio.sleep(self.retry_interval)
-            
-        logger.error(f"Job {job_id} timed out after {self.max_retries} attempts")
-        return None
 
     async def get_price(self, url: str) -> Dict[str, Any]:
-        """Get price information for a URL using ScraperAPI."""
         start_time = datetime.now(timezone.utc)
-        job_id = str(uuid.uuid4())
-        
-        try:
-            # Create scraping job
-            job_data = await self.create_scrape_job(url)
-            job_id = job_data.get("id")
-            
-            # Wait for completion
-            response_data = await self.wait_for_completion(job_id)
-            if not response_data:
-                return {
-                    "request_status": {
-                        "status": "failed",
-                        "job_id": job_id,
-                        "start_time": start_time,
-                        "elapsed_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-                        "error_message": "Scraping job failed or timed out"
-                    }
-                }
-            
-            # Extract product info
-            html = response_data.get("body", "")
-            product_info = await self.extract_product_info(html, url)
-            
-            if not product_info:
-                return {
-                    "request_status": {
-                        "status": "failed",
-                        "job_id": job_id,
-                        "start_time": start_time,
-                        "elapsed_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-                        "error_message": "Failed to extract product information"
-                    }
-                }
-            
-            return {
-                "request_status": {
-                    "status": "completed",
-                    "job_id": job_id,
-                    "start_time": start_time,
-                    "elapsed_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-                },
-                "result": product_info
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting price for {url}: {str(e)}")
+        html = await self.fetch_content(url)
+
+        if html is None:
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             return {
                 "request_status": {
                     "status": "failed",
-                    "job_id": job_id,
-                    "start_time": start_time,
-                    "elapsed_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-                    "error_message": str(e)
+                    "start_time": start_time.isoformat(),
+                    "elapsed_time_seconds": elapsed,
+                    "error_message": "Failed to fetch content"
                 }
-            } 
+            }
+
+        product_info = await self.extract_product_info(html, url)
+        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+
+        if product_info is None:
+            return {
+                "request_status": {
+                    "status": "failed",
+                    "start_time": start_time.isoformat(),
+                    "elapsed_time_seconds": elapsed,
+                    "error_message": "Failed to extract product information"
+                }
+            }
+
+        return {
+            "request_status": {
+                "status": "completed",
+                "start_time": start_time.isoformat(),
+                "elapsed_time_seconds": elapsed,
+            },
+            "result": product_info
+        } 
