@@ -1,7 +1,7 @@
 from typing import Dict, Optional
+from ..base import BaseScraper
 import json
 import logging
-from .base import BaseScraper
 from parsel import Selector
 import re
 
@@ -16,8 +16,14 @@ class AlbertsonsScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         """Get Albertsons-specific scraper configuration."""
         return {
-            "render": 'false',
+            "premium": True,
             "country_code": "us",
+            "device_type": "desktop",
+            "keep_headers": True,
+            "headers": {
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.5"
+            }
         }
 
     def transform_url(self, url: str) -> str:
@@ -82,6 +88,6 @@ class AlbertsonsScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Error parsing product info: {e}")
+        except Exception as e:
+            logger.error(f"Error extracting product info: {e}")
             return None

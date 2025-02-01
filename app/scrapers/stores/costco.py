@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from .base import BaseScraper
+from ..base import BaseScraper
 import json
 from parsel import Selector
 import logging
