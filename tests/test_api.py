@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from httpx import AsyncClient
 from app.main import app
+from app.core.config import get_settings
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -170,6 +171,46 @@ async def test_health():
         response = await client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "healthy"}
+
+@pytest.mark.asyncio
+async def test_get_prices_success():
+    urls = [
+        "https://www.albertsons.com/shop/product-details.970555.html",
+        "https://www.walmart.com/ip/Great-Value-All-Purpose-Flour-5-lb/10534869"
+    ]
+
+    payload = {"urls": urls}
+
+    async with AsyncClient(app=app, base_url="http://testserver") as client:
+        response = await client.post("/api/v1/prices", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == len(urls)
+        for url in urls:
+            assert url in data
+            assert data[url]["request_status"]["status"] in ["completed", "failed"]
+
+@pytest.mark.asyncio
+async def test_get_prices_unsupported_store():
+    urls = ["https://www.unsupportedstore.com/product/12345"]
+
+    payload = {"urls": urls}
+
+    async with AsyncClient(app=app, base_url="http://testserver") as client:
+        response = await client.post("/api/v1/prices", json=payload)
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"] == "One or more URLs are from unsupported stores."
+
+@pytest.mark.asyncio
+async def test_get_prices_invalid_url():
+    urls = ["not a url"]
+
+    payload = {"urls": urls}
+
+    async with AsyncClient(app=app, base_url="http://testserver") as client:
+        response = await client.post("/api/v1/prices", json=payload)
+        assert response.status_code == 422  # Unprocessable Entity
 
 if __name__ == "__main__":
     print("Testing API endpoints...")

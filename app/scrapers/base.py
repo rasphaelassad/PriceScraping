@@ -66,12 +66,12 @@ class BaseScraper(ABC):
         params = {
             "api_key": self.api_key,
             "url": transformed_url,
-            **self.get_scraper_config()
+            **self.get_scraper_config(),
         }
 
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(self.base_url, params=params)
+                response = await client.get(self.base_url, params=params, timeout=self.settings.api_timeout)
                 response.raise_for_status()
                 return response.text
             except httpx.HTTPError as e:
@@ -89,7 +89,7 @@ class BaseScraper(ABC):
                     "status": "failed",
                     "start_time": start_time.isoformat(),
                     "elapsed_time_seconds": elapsed,
-                    "error_message": "Failed to fetch content"
+                    "error_message": "Failed to fetch content",
                 }
             }
 
@@ -102,7 +102,7 @@ class BaseScraper(ABC):
                     "status": "failed",
                     "start_time": start_time.isoformat(),
                     "elapsed_time_seconds": elapsed,
-                    "error_message": "Failed to extract product information"
+                    "error_message": "Failed to extract product information",
                 }
             }
 
@@ -112,5 +112,5 @@ class BaseScraper(ABC):
                 "start_time": start_time.isoformat(),
                 "elapsed_time_seconds": elapsed,
             },
-            "result": product_info
+            "result": product_info,
         } 

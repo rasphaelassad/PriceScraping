@@ -1,12 +1,11 @@
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
 from functools import lru_cache
-import os
 
 class Settings(BaseSettings):
     """Application settings."""
     
     # API Keys
-    scraper_api_key: str = os.getenv("SCRAPER_API_KEY", "")
+    scraper_api_key: str  # This will raise an error if not provided
     
     # API Configuration
     api_timeout: int = 30  # seconds
@@ -18,6 +17,7 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        env_file_encoding = 'utf-8'
 
 @lru_cache()
 def get_settings() -> Settings:

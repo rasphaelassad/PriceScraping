@@ -19,7 +19,6 @@ class ProductInfo(BaseModel):
 class RequestStatus(BaseModel):
     """Status information for a scraping request."""
     status: str  # 'completed', 'failed', 'pending'
-    job_id: str
     start_time: datetime
     elapsed_time_seconds: float
     error_message: Optional[str] = None
@@ -29,6 +28,7 @@ class PriceRequest(BaseModel):
     urls: List[HttpUrl]
 
     @field_validator('urls')
+    @classmethod
     def validate_urls(cls, v):
         if not v:
             raise ValueError("URLs list cannot be empty")
