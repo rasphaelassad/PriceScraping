@@ -14,4 +14,4 @@ def configure_logging():
             logging.StreamHandler(),
             logging.FileHandler(log_filename)
         ]
-    ) 
+    )

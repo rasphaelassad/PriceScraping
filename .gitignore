@@ -25,6 +25,8 @@ wheels/
 .venv/
 venv/
 ENV/
+venv.bak/
+venv_env/
 
 # IDE
 .idea/
@@ -83,3 +85,10 @@ scripts/
 
 #logs
 logs/
+
+# System files
+.DS_Store
+
+# Miscellaneous
+*.tmp
+*.temp

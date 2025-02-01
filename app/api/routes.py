@@ -30,4 +30,4 @@ async def get_prices(request: PriceRequest):
         raise HTTPException(status_code=400, detail="One or more URLs are from unsupported stores.")
 
     results = await asyncio.gather(*tasks)
-    return dict(zip([str(url) for url in request.urls], results)) 
+    return dict(zip([str(url) for url in request.urls], results))
