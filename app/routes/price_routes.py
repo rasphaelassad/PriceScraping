@@ -1,21 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.models.database import get_db
-from app.schemas.request_schemas import PriceRequest, PriceResponse, UrlResult, RequestStatus
+from fastapi import APIRouter, HTTPException
+from app.schemas.request_schemas import PriceRequest
 from app.services.price_service import PriceService
 from app.core.scraper_factory import ScraperFactory
 import logging
 import traceback
-from typing import Dict, List, Any
-from pydantic import HttpUrl
-import uuid
-from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/supported-stores")
-def get_supported_stores():
+def get_supported_stores() -> List[str]:
     """Get a list of supported stores."""
     try:
         return ScraperFactory.get_supported_stores()
@@ -26,40 +21,22 @@ def get_supported_stores():
 
 @router.post("/prices")
 async def get_prices(request: PriceRequest) -> Dict[str, Any]:
-    """Get prices for the requested URLs."""
+    """
+    Get prices for multiple URLs.
+    The store will be automatically identified from each URL.
+    """
     try:
         service = PriceService()
-        result = await service.get_prices(request)
-        
-        # Ensure each URL result has the correct structure
-        formatted_result = {}
-        for url, data in result.items():
-            if isinstance(data, dict) and "request_status" in data:
-                # Already in correct format
-                formatted_result[url] = data
-            else:
-                # Format the result to include request_status
-                formatted_result[url] = {
-                    "request_status": {
-                        "status": "completed" if data else "failed",
-                        "job_id": str(uuid.uuid4()),
-                        "start_time": datetime.now(timezone.utc),
-                        "elapsed_time_seconds": 0.0,
-                        "price_found": bool(data),
-                        "details": "Retrieved from cache" if data else "Failed to get price"
-                    },
-                    "result": data
-                }
-        
-        return formatted_result
-        
+        return await service.get_prices(request)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing price request: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/raw-content")
-async def get_raw_content(request: PriceRequest,db: Session = Depends(get_db)):
+async def get_raw_content(request: PriceRequest):
     """
     Get raw HTML/JSON response without processing.
     

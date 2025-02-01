@@ -1,23 +1,25 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 from functools import lru_cache
+import os
 
 class Settings(BaseSettings):
-    app_name: str = "Store Price API"
-    debug: bool = True
-    cache_ttl_hours: int = 24
-    request_timeout_minutes: int = 10
-    immediate_timeout_seconds: int = 60
-    database_url: str = "sqlite:///price_scraper.db"
-    scraper_api_key: str = ""
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        case_sensitive=False,
-        extra="allow"  # Allow extra fields in the settings
-    )
+    """Application settings."""
+    
+    # API Keys
+    scraper_api_key: str = os.getenv("SCRAPER_API_KEY", "")
+    
+    # API Configuration
+    api_timeout: int = 30  # seconds
+    max_retries: int = 3
+    
+    # Scraping Configuration
+    max_urls_per_request: int = 10
+    max_scrape_time: int = 60  # seconds
+    
+    class Config:
+        env_file = ".env"
 
 @lru_cache()
-def get_settings():
+def get_settings() -> Settings:
+    """Get cached settings instance."""
     return Settings() 

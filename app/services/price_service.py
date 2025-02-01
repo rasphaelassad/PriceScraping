@@ -18,7 +18,7 @@ class PriceService:
     """Service for handling price-related operations."""
     
     def __init__(self):
-        """Initialize the service with scraper factory."""
+        """Initialize the service."""
         self.scraper_factory = ScraperFactory()
         self._background_tasks: Set[asyncio.Task] = set()
 
@@ -30,60 +30,87 @@ class PriceService:
             pass
 
     async def get_prices(self, request: PriceRequest) -> Dict[str, Any]:
-        """Get prices for the requested URLs."""
-        async with get_async_db() as db:
-            try:
-                cache_manager = CacheManager(db)
-                
-                # Get scraper for the store
-                scraper = self.scraper_factory.get_scraper(request.store_name)
-                if not scraper:
-                    raise HTTPException(status_code=400, detail=f"Invalid store: {request.store_name}")
-                
-                # Process each URL
-                results = {}
-                for url in request.urls:
-                    # Check cache first using original URL
-                    cached_result = await cache_manager.get_cached_product(str(url), request.store_name)
-                    if cached_result:
-                        # Format cached result to match expected structure
-                        results[str(url)] = {
-                            "request_status": {
-                                "status": "completed",
-                                "job_id": cached_result.get("id"),  # Use database ID as job ID
-                                "start_time": cached_result.get("timestamp"),
-                                "elapsed_time_seconds": 0.0,  # Already completed, so no elapsed time
-                                "price_found": True,
-                                "details": "Retrieved from cache"
-                            },
-                            "result": {
-                                "store": cached_result.get("store"),
-                                "url": cached_result.get("url"),
-                                "name": cached_result.get("name"),
-                                "price": cached_result.get("price"),
-                                "price_string": cached_result.get("price_string"),
-                                "price_per_unit": cached_result.get("price_per_unit"),
-                                "price_per_unit_string": cached_result.get("price_per_unit_string"),
-                                "store_id": cached_result.get("store_id"),
-                                "store_address": cached_result.get("store_address"),
-                                "store_zip": cached_result.get("store_zip"),
-                                "brand": cached_result.get("brand"),
-                                "sku": cached_result.get("sku"),
-                                "category": cached_result.get("category"),
-                                "timestamp": cached_result.get("timestamp")
-                            }
+        """
+        Get prices for multiple URLs, automatically identifying stores.
+        
+        Args:
+            request: The price request containing URLs to process.
+            
+        Returns:
+            Dict mapping URLs to their results.
+        """
+        try:
+            # Group URLs by store
+            store_urls: Dict[str, list] = {}
+            unknown_urls: list = []
+            
+            for url in request.urls:
+                store = self.scraper_factory.identify_store_from_url(str(url))
+                if store:
+                    if store not in store_urls:
+                        store_urls[store] = []
+                    store_urls[store].append(str(url))
+                else:
+                    unknown_urls.append(str(url))
+
+            if unknown_urls:
+                logger.warning(f"Found {len(unknown_urls)} URLs with unknown stores: {unknown_urls}")
+                supported = ", ".join(self.scraper_factory.get_supported_stores())
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Some URLs are from unsupported stores. Supported stores are: {supported}"
+                )
+
+            # Process each store's URLs concurrently
+            tasks = []
+            for store_name, urls in store_urls.items():
+                scraper = self.scraper_factory.get_scraper(store_name)
+                for url in urls:
+                    tasks.append(self._process_url(scraper, url))
+
+            # Wait for all tasks to complete
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Combine results
+            combined_results = {}
+            for url, result in zip([str(u) for u in request.urls], results):
+                if isinstance(result, Exception):
+                    combined_results[url] = {
+                        "request_status": {
+                            "status": "failed",
+                            "job_id": None,
+                            "start_time": datetime.now(timezone.utc),
+                            "elapsed_time_seconds": 0.0,
+                            "error_message": str(result)
                         }
-                        continue
-                        
-                    # If not in cache, add to URLs to scrape
-                    if str(url) not in results:
-                        results[str(url)] = await scraper.get_price(str(url))
-                        
-                return results
-                
-            except Exception as e:
-                logger.error(f"Error in get_prices: {e}")
-                raise HTTPException(status_code=400, detail=str(e))
+                    }
+                else:
+                    combined_results[url] = result
+
+            return combined_results
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error processing price request: {e}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def _process_url(self, scraper, url: str) -> Dict[str, Any]:
+        """Process a single URL with its scraper."""
+        try:
+            return await scraper.get_price(url)
+        except Exception as e:
+            logger.error(f"Error processing URL {url}: {e}")
+            return {
+                "request_status": {
+                    "status": "failed",
+                    "job_id": None,
+                    "start_time": datetime.now(timezone.utc),
+                    "elapsed_time_seconds": 0.0,
+                    "error_message": str(e)
+                }
+            }
 
     async def _process_urls_background(self, store_name: str, urls: List[str]):
         """Process URLs in the background."""

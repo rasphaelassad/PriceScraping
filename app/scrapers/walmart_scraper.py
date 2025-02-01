@@ -1,10 +1,14 @@
+from typing import Dict, Optional
+from .base_scraper import BaseScraper
 import json
 from parsel import Selector
-from .base_scraper import BaseScraper, logger
-from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WalmartScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
+        """Get Walmart-specific scraper configuration."""
         return {
             "premium": False,
             "country_code": "us",
@@ -17,17 +21,15 @@ class WalmartScraper(BaseScraper):
         }
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
+        """Extract product information from Walmart HTML."""
         try:
-            logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)
             scripts = selector.css("script#__NEXT_DATA__::text").get()
             if not scripts:
                 logger.error("Could not find __NEXT_DATA__ script in HTML")
                 return None
             
-            logger.info("Found __NEXT_DATA__ script, parsing JSON")
             data = json.loads(scripts)
-
             product = (
                 data.get("props", {})
                     .get("pageProps", {})
@@ -37,7 +39,7 @@ class WalmartScraper(BaseScraper):
             )
 
             # Extract basic product info
-            price_info = product.get("priceInfo", {}).get("unitPrice", {})
+            price_info = product.get("priceInfo", {}).get("currentPrice", {})
             price = price_info.get("price")
             price_string = price_info.get("priceString")
             name = product.get("name")
@@ -51,7 +53,7 @@ class WalmartScraper(BaseScraper):
             store_address = store_info.get("address", {}).get("address")
             store_zip = store_info.get("address", {}).get("postalCode")
 
-            result = {
+            return {
                 "store": "walmart",
                 "url": url,
                 "name": name,
@@ -64,9 +66,6 @@ class WalmartScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-            
-            logger.info(f"Successfully extracted product info: {result}")
-            return result
         except Exception as e:
-            logger.error(f"Error parsing Walmart product info: {str(e)}")
+            logger.error(f"Error extracting product info: {e}")
             return None

@@ -1,12 +1,16 @@
+from typing import Dict, Optional
+from .base_scraper import BaseScraper
 import json
 from parsel import Selector
-from .base_scraper import BaseScraper, logger
-from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CostcoScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
+        """Get Costco-specific scraper configuration."""
         return {
-            "premium": False,
+            "premium": True,
             "country_code": "us",
             "device_type": "desktop",
             "keep_headers": True,
@@ -17,41 +21,44 @@ class CostcoScraper(BaseScraper):
         }
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
+        """Extract product information from Costco HTML."""
         try:
-            logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)
-            scripts = selector.css("script#__NEXT_DATA__::text").get()
-            if not scripts:
-                logger.error("Could not find __NEXT_DATA__ script in HTML")
-                return None
             
-            logger.info("Found __NEXT_DATA__ script, parsing JSON")
-            data = json.loads(scripts)
+            # Extract product data from script tag
+            script = selector.css('script#productDataJson::text').get()
+            if not script:
+                logger.error("Could not find product JSON data")
+                return None
+                
+            data = json.loads(script)
+            if not isinstance(data, dict):
+                logger.error("Invalid product data format")
+                return None
 
-            product = (
-                data.get("props", {})
-                    .get("pageProps", {})
-                    .get("initialData", {})
-                    .get("data", {})
-                    .get("product", {})
-            )
+            # Extract basic info
+            name = data.get("name")
+            if not name:
+                logger.error("No product name found")
+                return None
 
-            # Extract basic product info
-            price_info = product.get("priceInfo", {}).get("unitPrice", {})
-            price = price_info.get("price")
-            price_string = price_info.get("priceString")
-            name = product.get("name")
+            # Extract price info
+            price_info = data.get("productPricing", {})
+            price = price_info.get("finalPrice")
+            price_string = price_info.get("formattedFinalPrice")
 
-            # Extract additional product info
-            sku = product.get("usItemId")
-            brand = product.get("brand")
-            category = product.get("category")
-            store_info = product.get("store", {})
-            store_id = store_info.get("id")
-            store_address = store_info.get("address", {}).get("address")
-            store_zip = store_info.get("address", {}).get("postalCode")
+            # Extract additional info
+            brand = data.get("brandName")
+            sku = data.get("itemNumber")
+            category = data.get("categoryString")
 
-            result = {
+            # Extract store info
+            store_info = data.get("warehouseInfo", {})
+            store_id = store_info.get("warehouseId")
+            store_address = store_info.get("address", {}).get("address1")
+            store_zip = store_info.get("address", {}).get("zipCode")
+
+            return {
                 "store": "costco",
                 "url": url,
                 "name": name,
@@ -64,9 +71,7 @@ class CostcoScraper(BaseScraper):
                 "sku": sku,
                 "category": category
             }
-            
-            logger.info(f"Successfully extracted product info: {result}")
-            return result
+
         except Exception as e:
-            logger.error(f"Error parsing Costco product info: {str(e)}")
+            logger.error(f"Error extracting product info: {e}")
             return None

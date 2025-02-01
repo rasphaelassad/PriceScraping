@@ -5,6 +5,7 @@ from app.scrapers.walmart_scraper import WalmartScraper
 from app.scrapers.albertsons_scraper import AlbertsonsScraper
 from app.scrapers.chefstore_scraper import ChefStoreScraper
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,32 @@ class ScraperFactory:
         "chefstore": ChefStoreScraper,
         "costco": CostcoScraper,
     }
+
+    _url_patterns: Dict[str, str] = {
+        "walmart": r"(?:www\.)?walmart\.com",
+        "albertsons": r"(?:www\.)?albertsons\.com",
+        "chefstore": r"(?:www\.)?chefstore\.com",
+        "costco": r"(?:www\.)?costco\.com",
+    }
+
+    @classmethod
+    def identify_store_from_url(cls, url: str) -> Optional[str]:
+        """
+        Identify the store from a product URL.
+        
+        Args:
+            url: The product URL to identify the store from.
+            
+        Returns:
+            The store name if identified, None otherwise.
+        """
+        if not url:
+            return None
+            
+        for store_name, pattern in cls._url_patterns.items():
+            if re.search(pattern, url, re.IGNORECASE):
+                return store_name
+        return None
 
     @classmethod
     def get_scraper(cls, store_name: str) -> BaseScraper:

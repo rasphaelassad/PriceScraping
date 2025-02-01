@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.routes import price_routes, admin_routes
+from app.routes import price_routes
 from app.core.config import get_settings
 import logging
 import traceback
@@ -23,9 +23,8 @@ logging.basicConfig(
     ]
 )
 
-# Set SQLAlchemy logging to INFO level
-logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
-logging.getLogger('sqlalchemy.pool').setLevel(logging.DEBUG)
+# Set logging levels
+logging.getLogger('httpx').setLevel(logging.INFO)
 
 # Get root logger and add file handler
 logger = logging.getLogger(__name__)
@@ -46,8 +45,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(price_routes.router, tags=["prices"])
-app.include_router(admin_routes.router, prefix="/admin", tags=["admin"])
 
+# Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global exception handler caught: {exc}")

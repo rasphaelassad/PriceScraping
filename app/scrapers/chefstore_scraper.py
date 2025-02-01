@@ -1,13 +1,15 @@
-from parsel import Selector
-from .base_scraper import BaseScraper, logger
-from typing import Dict
+from typing import Dict, Optional
+from .base_scraper import BaseScraper
 import json
+from parsel import Selector
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ChefStoreScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
+        """Get ChefStore-specific scraper configuration."""
         return {
-            'max_cost': '30',
-            "retry_times": 3,
             "premium": False,
             "country_code": "us",
             "device_type": "desktop",
@@ -18,53 +20,56 @@ class ChefStoreScraper(BaseScraper):
             }
         }
 
-    async def extract_product_info(self, html: str, url: str) -> Dict:
+    async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
+        """Extract product information from ChefStore HTML."""
         try:
-            logger.info(f"Starting to extract product info for URL: {url}")
             selector = Selector(text=html)
             
-            # Get JSON-LD script content
-            scripts = selector.css('script[type="application/ld+json"]::text').get()
-            if not scripts:
-                logger.error("Could not find JSON-LD script in HTML")
+            # Extract product data from script tag
+            script = selector.css('script[type="application/ld+json"]::text').get()
+            if not script:
+                logger.error("Could not find product JSON data")
                 return None
-            
-            logger.info("Found JSON-LD script, parsing JSON")
-            data = json.loads(scripts)
-            
-            # Extract store information
-            store_link = selector.css('a.store-address-link::attr(href)').get()
-            try:
-                store_id = store_link.split('/')[-2] if store_link else None
-            except (IndexError, AttributeError):
-                store_id = None
-            store_address = selector.css('a.store-address-link::text').get()
-            
-            # Extract price from offers
-            price = None
-            if "offers" in data:
-                if isinstance(data["offers"], dict):
-                    if "highPrice" in data["offers"]:
-                        price = data["offers"]["highPrice"]
-                    elif "price" in data["offers"]:
-                        price = data["offers"]["price"]
-            
-            result = {
+                
+            data = json.loads(script)
+            if not isinstance(data, dict):
+                logger.error("Invalid product data format")
+                return None
+
+            # Extract basic info
+            name = data.get("name")
+            if not name:
+                logger.error("No product name found")
+                return None
+
+            # Extract price info
+            price = data.get("offers", {}).get("price")
+            price_string = f"${price}" if price else None
+
+            # Extract additional info
+            brand = data.get("brand", {}).get("name")
+            sku = data.get("sku")
+            category = data.get("category")
+
+            # Extract store info from meta tags
+            store_id = selector.css('meta[property="business:contact_data:store_code"]::attr(content)').get()
+            store_address = selector.css('meta[property="business:contact_data:street_address"]::attr(content)').get()
+            store_zip = selector.css('meta[property="business:contact_data:postal_code"]::attr(content)').get()
+
+            return {
                 "store": "chefstore",
                 "url": url,
-                "name": data.get("name"),
+                "name": name,
                 "price": float(price) if price else None,
-                "price_string": f"${price}" if price else None,
+                "price_string": price_string,
                 "store_id": store_id,
                 "store_address": store_address,
-                "sku": data.get("sku"),
-                "brand": data.get("brand", {}).get("name"),
-                "category": data.get("category")
+                "store_zip": store_zip,
+                "brand": brand,
+                "sku": sku,
+                "category": category
             }
-            
-            logger.info(f"Successfully extracted product info: {result}")
-            return result
-            
+
         except Exception as e:
-            logger.error(f"Error parsing ChefStore product info: {str(e)}")
+            logger.error(f"Error extracting product info: {e}")
             return None
