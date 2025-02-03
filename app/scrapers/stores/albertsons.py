@@ -16,7 +16,6 @@ class AlbertsonsScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         """Get Albertsons-specific scraper configuration."""
         return {
-            "premium": True,
             "country_code": "us",
             "device_type": "desktop",
             "keep_headers": True,

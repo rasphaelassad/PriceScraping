@@ -13,10 +13,12 @@ router = APIRouter()
 @router.get("/supported-stores", response_model=List[str])
 async def get_supported_stores_route() -> List[str]:
     """Get a list of supported stores."""
+    print("get_supported_stores_route")
     return get_supported_stores()
 
 @router.post("/prices")
 async def get_prices(urls: List[HttpUrl]) -> Dict[str, Any]:
+    print("get_prices_route")
     """
     Get prices for multiple URLs.
     
