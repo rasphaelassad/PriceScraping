@@ -3,6 +3,10 @@ import sys
 import pytest
 import requests
 from typing import Dict, Any
+from app.core.config import get_settings
+
+# Get settings
+settings = get_settings()
 
 # Base URL for the running FastAPI server
 base_url = os.getenv("TEST_BASE_URL", "http://localhost:8000")
@@ -26,7 +30,14 @@ def test_get_prices_valid_url():
         "urls": ["https://www.albertsons.com/shop/product-details.188020052.html"]
     }
     
-    response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
+    # Verify we're not exceeding max URLs per request
+    assert len(test_data["urls"]) <= settings.max_urls_per_request
+    
+    response = requests.post(
+        f"{base_url}/api/v1/prices", 
+        json=test_data,
+        timeout=settings.api_timeout
+    )
     
     # Print response for debugging
     print(f"Response Status: {response.status_code}")
