@@ -15,10 +15,10 @@ class CostcoScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         """Get Costco-specific scraper configuration."""
         return {
-            "premium": True,
-            "country_code": "us",
-            "device_type": "desktop",
-            "keep_headers": True,
+            "premium": "true",
+            "country": "us",
+            "render": "true",
+            "keep_headers": "true",
             "headers": {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5"
@@ -52,6 +52,11 @@ class CostcoScraper(BaseScraper):
             price = price_info.get("finalPrice")
             price_string = price_info.get("formattedFinalPrice")
 
+            # Extract price per unit info
+            unit_price_info = price_info.get("unitPrice", {})
+            price_per_unit = unit_price_info.get("value")
+            price_per_unit_string = unit_price_info.get("formattedValue")
+
             # Extract additional info
             brand = data.get("brandName")
             sku = data.get("itemNumber")
@@ -69,6 +74,8 @@ class CostcoScraper(BaseScraper):
                 "name": name,
                 "price": float(price) if price else None,
                 "price_string": price_string,
+                "price_per_unit": float(price_per_unit) if price_per_unit else None,
+                "price_per_unit_string": price_per_unit_string,
                 "store_id": store_id,
                 "store_address": store_address,
                 "store_zip": store_zip,

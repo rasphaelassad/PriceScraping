@@ -13,12 +13,13 @@ router = APIRouter()
 @router.get("/supported-stores", response_model=List[str])
 async def get_supported_stores_route() -> List[str]:
     """Get a list of supported stores."""
-    print("get_supported_stores_route")
-    return get_supported_stores()
+    logger.info("Getting list of supported stores")
+    stores = get_supported_stores()
+    logger.info(f"Found supported stores: {stores}")
+    return stores
 
 @router.post("/prices")
 async def get_prices(urls: List[HttpUrl]) -> Dict[str, Any]:
-    print("get_prices_route")
     """
     Get prices for multiple URLs.
     
@@ -31,18 +32,24 @@ async def get_prices(urls: List[HttpUrl]) -> Dict[str, Any]:
     Raises:
         HTTPException: If any URLs are from unsupported stores.
     """
+    logger.info(f"Received request to get prices for URLs: {urls}")
     tasks = []
     unsupported_urls = []
 
     for url in urls:
         try:
+            logger.info(f"Attempting to get scraper for URL: {url}")
             scraper = get_scraper_for_url(str(url))
+            logger.info(f"Found scraper {scraper.__class__.__name__} for URL: {url}")
             tasks.append(scraper.get_price(str(url)))
         except ValueError as e:
+            logger.error(f"Error getting scraper for URL {url}: {str(e)}")
             unsupported_urls.append({"url": str(url), "error": str(e)})
 
     if unsupported_urls:
         supported_stores = get_supported_stores()
+        logger.error(f"Found unsupported URLs: {unsupported_urls}")
+        logger.info(f"Supported stores are: {supported_stores}")
         raise HTTPException(
             status_code=400,
             detail={
@@ -52,5 +59,8 @@ async def get_prices(urls: List[HttpUrl]) -> Dict[str, Any]:
             }
         )
 
+    logger.info(f"Starting price fetching for {len(tasks)} URLs")
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    return dict(zip([str(url) for url in urls], results))
+    response = dict(zip([str(url) for url in urls], results))
+    logger.info("Successfully gathered all prices")
+    return response

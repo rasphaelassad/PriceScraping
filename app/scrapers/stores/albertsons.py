@@ -11,17 +11,19 @@ class AlbertsonsScraper(BaseScraper):
     """Scraper for Albertsons products."""
     
     store_name = "albertsons"
-    url_pattern = r"(?:www\.)?albertsons\.com"
+    url_pattern = r"(?:www\.)?albertsons\.com/shop/product-details\.\d+\.html"
     
     def get_scraper_config(self) -> dict:
         """Get Albertsons-specific scraper configuration."""
         return {
+            "premium": False,
             "country_code": "us",
-            "device_type": "desktop",
+            "render": False,
             "keep_headers": True,
             "headers": {
                 "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.5"
+                "Accept-Language": "en-US,en;q=0.5",
+                "ocp-apim-subscription-key": "6c21edb7bcda4f0e918348db16147431"
             }
         }
 
@@ -35,10 +37,11 @@ class AlbertsonsScraper(BaseScraper):
                 return url
                 
             # Convert to API URL
-            api_url = f"https://www.albertsons.com/abs/pub/xapi/v1/product/{product_id.group(1)}"
+            api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id.group(1)}&banner=albertsons&storeId=177"
             logger.info(f"Transformed URL {url} to {api_url}")
             return api_url
         except Exception as e:
+
             logger.error(f"Error transforming URL {url}: {e}")
             return url
 
@@ -63,6 +66,10 @@ class AlbertsonsScraper(BaseScraper):
             price = price_info.get("regularPrice")
             price_string = f"${price}" if price else None
 
+            # Extract price per unit info
+            price_per_unit = price_info.get("pricePerUnit", {}).get("price")
+            price_per_unit_string = price_info.get("pricePerUnit", {}).get("displayString")
+
             # Extract store info
             store_info = product.get("storeInfo", {})
             store_id = store_info.get("storeId")
@@ -80,6 +87,8 @@ class AlbertsonsScraper(BaseScraper):
                 "name": name,
                 "price": float(price) if price else None,
                 "price_string": price_string,
+                "price_per_unit": float(price_per_unit) if price_per_unit else None,
+                "price_per_unit_string": price_per_unit_string,
                 "store_id": store_id,
                 "store_address": store_address,
                 "store_zip": store_zip,

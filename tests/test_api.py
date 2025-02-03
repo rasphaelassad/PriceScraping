@@ -3,11 +3,6 @@ import sys
 import pytest
 import requests
 from typing import Dict, Any
-from app.core.config import get_settings
-
-# Get settings
-settings = get_settings()
-
 # Base URL for the running FastAPI server
 base_url = os.getenv("TEST_BASE_URL", "http://localhost:8000")
 
@@ -26,17 +21,11 @@ def test_get_supported_stores():
 
 def test_get_prices_valid_url():
     """Test the prices endpoint with a valid URL."""
-    test_data = {
-        "urls": ["https://www.albertsons.com/shop/product-details.188020052.html"]
-    }
-    
-    # Verify we're not exceeding max URLs per request
-    assert len(test_data["urls"]) <= settings.max_urls_per_request
+    test_data = ["https://www.albertsons.com/shop/product-details.188020052.html"]
     
     response = requests.post(
         f"{base_url}/api/v1/prices", 
-        json=test_data,
-        timeout=settings.api_timeout
+        json=test_data
     )
     
     # Print response for debugging
@@ -49,18 +38,16 @@ def test_get_prices_valid_url():
     assert isinstance(data, dict)
     
     # Check the response structure for the URL
-    url_data = data.get(test_data["urls"][0])
+    url_data = data.get(test_data[0])
     assert url_data is not None
     
     # Verify the expected fields are present
-    expected_fields = {"store", "url", "name", "price"}
+    expected_fields = {"request_status", "result"}
     assert all(field in url_data for field in expected_fields)
 
 def test_get_prices_invalid_url():
     """Test the prices endpoint with an invalid URL."""
-    test_data = {
-        "urls": ["https://invalid-store.com/product/123"]
-    }
+    test_data = ["https://invalid-store.com/product/123"]
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -74,7 +61,7 @@ def test_get_prices_invalid_url():
 
 def test_get_prices_empty_urls():
     """Test the prices endpoint with empty URL list."""
-    test_data = {"urls": []}
+    test_data = []
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -85,12 +72,10 @@ def test_get_prices_empty_urls():
 
 def test_get_prices_multiple_urls():
     """Test the prices endpoint with multiple URLs."""
-    test_data = {
-        "urls": [
-            "https://www.albertsons.com/shop/product-details.188020052.html",
-            "https://www.walmart.com/ip/Great-Value-2-Milk-1-Gallon/10450114"
-        ]
-    }
+    test_data = [
+        "https://www.albertsons.com/shop/product-details.188020052.html",
+        "https://www.walmart.com/ip/Great-Value-2-Milk-1-Gallon/10450114"
+    ]
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -98,14 +83,14 @@ def test_get_prices_multiple_urls():
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, dict)
-    assert len(data) == len(test_data["urls"])
+    assert len(data) == len(test_data)
     
     # Check each URL response
-    for url in test_data["urls"]:
+    for url in test_data:
         assert url in data
         url_data = data[url]
         assert isinstance(url_data, dict)
-        expected_fields = {"store", "url", "name", "price"}
+        expected_fields = {"request_status", "result"}
         assert all(field in url_data for field in expected_fields)
 
 def check_server_health() -> bool:
@@ -124,4 +109,5 @@ if __name__ == "__main__":
         sys.exit(1)
     #check_server_health()    
     test_get_supported_stores()
+    test_get_prices_valid_url()
     #pytest.main([__file__, "-v"])

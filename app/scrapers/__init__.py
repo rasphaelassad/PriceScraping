@@ -2,6 +2,7 @@
 Price scraping functionality for various online stores.
 """
 from typing import Type, List
+import logging
 from .base import BaseScraper
 from .stores import (
     WalmartScraper,
@@ -9,6 +10,8 @@ from .stores import (
     AlbertsonsScraper,
     ChefStoreScraper,
 )
+
+logger = logging.getLogger(__name__)
 
 # List of available scrapers
 AVAILABLE_SCRAPERS: List[Type[BaseScraper]] = [
@@ -24,11 +27,23 @@ def get_supported_stores() -> list[str]:
 
 def get_scraper_for_url(url: str) -> BaseScraper:
     """Get appropriate scraper instance for a URL."""
+    logger.info(f"Finding scraper for URL: {url}")
+    
     for scraper_class in AVAILABLE_SCRAPERS:
-        if scraper_class.can_handle_url(url):
-            return scraper_class()
+        logger.debug(f"Checking if {scraper_class.__name__} can handle URL")
+        try:
+            if scraper_class.can_handle_url(url):
+                logger.info(f"Found matching scraper: {scraper_class.__name__}")
+                return scraper_class()
+            else:
+                logger.debug(f"{scraper_class.__name__} cannot handle URL")
+        except Exception as e:
+            logger.error(f"Error checking {scraper_class.__name__}: {str(e)}")
+    
     supported = ", ".join(get_supported_stores())
-    raise ValueError(f"No scraper found for URL: {url}. Supported stores are: {supported}")
+    error_msg = f"No scraper found for URL: {url}. Supported stores are: {supported}"
+    logger.error(error_msg)
+    raise ValueError(error_msg)
 
 __all__ = [
     'BaseScraper',

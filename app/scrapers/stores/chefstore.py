@@ -15,10 +15,10 @@ class ChefStoreScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         """Get ChefStore-specific scraper configuration."""
         return {
-            "premium": True,
-            "country_code": "us",
-            "device_type": "desktop",
-            "keep_headers": True,
+            "premium": "true",
+            "country": "us",
+            "render": "true",
+            "keep_headers": "true",
             "headers": {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5"
@@ -51,6 +51,11 @@ class ChefStoreScraper(BaseScraper):
             price = data.get("offers", {}).get("price")
             price_string = f"${price}" if price else None
 
+            # Extract price per unit info
+            unit_pricing = data.get("offers", {}).get("unitPricing", {})
+            price_per_unit = unit_pricing.get("price", {}).get("value")
+            price_per_unit_string = f"${price_per_unit} per {unit_pricing.get('unitText')}" if price_per_unit else None
+
             # Extract additional info
             brand = data.get("brand", {}).get("name")
             sku = data.get("sku")
@@ -67,6 +72,8 @@ class ChefStoreScraper(BaseScraper):
                 "name": name,
                 "price": float(price) if price else None,
                 "price_string": price_string,
+                "price_per_unit": float(price_per_unit) if price_per_unit else None,
+                "price_per_unit_string": price_per_unit_string,
                 "store_id": store_id,
                 "store_address": store_address,
                 "store_zip": store_zip,
