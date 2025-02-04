@@ -15,9 +15,7 @@ class ChefStoreScraper(BaseScraper):
     def get_scraper_config(self) -> dict:
         """Get ChefStore-specific scraper configuration."""
         return {
-            "premium": "true",
-            "country": "us",
-            "render": "true",
+            "country_code": "us",
             "keep_headers": "true",
             "headers": {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

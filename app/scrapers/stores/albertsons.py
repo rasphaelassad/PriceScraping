@@ -46,56 +46,40 @@ class AlbertsonsScraper(BaseScraper):
             return url
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
-        """Extract product information from Albertsons API response."""
+        """Extract product information from Albertsons API response"""
         try:
+            # Parse the JSON response
             data = json.loads(html)
-            product = data.get("product", {})
             
+            # Get the product from catalog response
+            product = data.get('catalog', {}).get('response', {}).get('docs', [{}])[0]
             if not product:
-                logger.error("No product data found")
+                logger.error("No product found in catalog response")
                 return None
-
-            # Extract basic info
-            name = product.get("name")
-            if not name:
-                logger.error("No product name found")
-                return None
-
-            # Extract price info
-            price_info = product.get("price", {})
-            price = price_info.get("regularPrice")
-            price_string = f"${price}" if price else None
-
-            # Extract price per unit info
-            price_per_unit = price_info.get("pricePerUnit", {}).get("price")
-            price_per_unit_string = price_info.get("pricePerUnit", {}).get("displayString")
-
-            # Extract store info
-            store_info = product.get("storeInfo", {})
-            store_id = store_info.get("storeId")
-            store_address = store_info.get("address", {}).get("line1")
-            store_zip = store_info.get("address", {}).get("zipCode")
-
-            # Extract additional info
-            brand = product.get("brand")
-            sku = product.get("sku")
-            category = product.get("category", {}).get("name")
-
-            return {
-                "store": self.store_name,
+            
+            # Build the standardized product information
+            product_info = {
+                "store": "Albertsons",
                 "url": url,
-                "name": name,
-                "price": float(price) if price else None,
-                "price_string": price_string,
-                "price_per_unit": float(price_per_unit) if price_per_unit else None,
-                "price_per_unit_string": price_per_unit_string,
-                "store_id": store_id,
-                "store_address": store_address,
-                "store_zip": store_zip,
-                "brand": brand,
-                "sku": sku,
-                "category": category
+                "name": product.get('name'),
+                "price": float(product.get('price', 0)),
+                "price_string": f"${product.get('price', '0')}",
+                "price_per_unit": float(product.get('pricePer', 0)) if product.get('pricePer') else None,
+                "price_per_unit_string": f"${product.get('pricePer', '0')}/Lb" if product.get('pricePer') else None,
+                "store_id": product.get('storeId'),
+                "store_address": None,  # Not available in this API response
+                "store_zip": None,  # Not available in this API response
+                "brand": None,  # Not directly available in this response
+                "sku": product.get('pid'),
+                "category": f"{product.get('departmentName', '')}/{product.get('shelfName', '')}"
             }
+
+            logger.info(f"Successfully extracted product info: {product_info}")
+            return product_info
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error extracting product info: {e}")
             return None

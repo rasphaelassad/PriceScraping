@@ -48,6 +48,28 @@ class BaseScraper(ABC):
         """Transform URL if needed. Override in store-specific scrapers if needed."""
         return url
 
+    async def get_raw_content(self, url: str) -> Dict[str, Any]:
+        """Get raw HTML content for a single URL without extracting product info."""
+        original_url = url
+        api_url = self.transform_url(url)
+        
+        try:
+            raw_result = await self._fetch_url(api_url)
+            if "error" in raw_result:
+                logger.error(f"Error fetching URL {url}: {raw_result['error']}")
+                raise ValueError(raw_result["error"])
+                
+            return {
+                "url": original_url,
+                "content": raw_result["content"],
+                "job_id": raw_result.get("job_id"),
+                "started_at": raw_result.get("started_at"),
+                "completed_at": raw_result.get("completed_at")
+            }
+        except Exception as e:
+            logger.error(f"Error getting raw content for URL {url}: {e}")
+            raise
+
     async def get_price(self, url: str) -> Dict[str, Any]:
         """Get price for a single URL."""
         original_url = url
@@ -91,6 +113,7 @@ class BaseScraper(ABC):
                     logger.debug(f"Initial job response: {job_data}")
                     
                     job_id = job_data.get('id')
+                    started_at = datetime.now(timezone.utc)
                     status_url = job_data.get('statusUrl')
                     logger.info(f"Status URL: {status_url}")
 
@@ -125,13 +148,14 @@ class BaseScraper(ABC):
                                         return {"error": "No body content in response"}
                                     
                                     return {
-                                        "content": body,
                                         "job_id": job_id,
-                                        "scraper_status_url": status_url,
-                                        "start_time": datetime.now(timezone.utc)
+                                        "started_at": started_at,
+                                        "completed_at": datetime.now(timezone.utc),
+                                        "content": body
                                     }
                                 elif status == 'failed':
                                     return {"error": f"ScraperAPI job failed: {status_data.get('error')}"}
+
                                 elif status == 'running':
                                     if current_attempt >= max_attempts:
                                         return {"error": f"Job timed out after {max_attempts} attempts"}

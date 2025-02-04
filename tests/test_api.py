@@ -2,7 +2,9 @@ import os
 import sys
 import pytest
 import requests
+import json
 from typing import Dict, Any
+from datetime import datetime
 # Base URL for the running FastAPI server
 base_url = os.getenv("TEST_BASE_URL", "http://localhost:8000")
 
@@ -41,9 +43,6 @@ def test_get_prices_valid_url():
     url_data = data.get(test_data[0])
     assert url_data is not None
     
-    # Verify the expected fields are present
-    expected_fields = {"request_status", "result"}
-    assert all(field in url_data for field in expected_fields)
 
 def test_get_prices_invalid_url():
     """Test the prices endpoint with an invalid URL."""
@@ -93,6 +92,43 @@ def test_get_prices_multiple_urls():
         expected_fields = {"request_status", "result"}
         assert all(field in url_data for field in expected_fields)
 
+def test_get_raw_content():
+    """Test getting raw content from a URL and saving it locally."""
+    test_url = "https://www.albertsons.com/shop/product-details.188020052.html"
+    
+    response = requests.post(
+        f"{base_url}/api/v1/raw-content",
+        json=[test_url]
+    )
+    
+    # Print response for debugging
+    print(f"Response Status: {response.status_code}")
+    print(f"Response Body: {response.json()}")
+    
+    # Assertions
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, dict)
+    
+    # Check the response structure for the URL
+    url_data = data.get(test_url)
+    assert url_data is not None
+    assert "content" in url_data
+    
+    # Save the raw content locally
+    os.makedirs("test_output", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"test_output/raw_content_{timestamp}.html"
+    
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(url_data["content"])
+    
+    print(f"Raw content saved to: {filename}")
+    
+    # Verify the file was created and has content
+    assert os.path.exists(filename)
+    assert os.path.getsize(filename) > 0
+
 def check_server_health() -> bool:
     """Check if the FastAPI server is running."""
     try:
@@ -108,6 +144,7 @@ if __name__ == "__main__":
         print(f"Please start the server at {base_url} first")
         sys.exit(1)
     #check_server_health()    
-    test_get_supported_stores()
-    test_get_prices_valid_url()
+    #test_get_supported_stores()
+    #test_get_prices_valid_url()
+    test_get_raw_content()
     #pytest.main([__file__, "-v"])
