@@ -1,8 +1,12 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+
+import requests
 from ..base import BaseScraper
 import json
 from parsel import Selector
 import logging
+import asyncio
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +14,6 @@ class ChefStoreScraper(BaseScraper):
     """Scraper for ChefStore products."""
     
     store_name = "chefstore"
-    url_pattern = r"(?:www\.)?chefstore\.com"
     
     def get_scraper_config(self) -> dict:
         """Get ChefStore-specific scraper configuration."""
@@ -22,6 +25,50 @@ class ChefStoreScraper(BaseScraper):
                 "Accept-Language": "en-US,en;q=0.5"
             }
         }
+    
+    async def get_prices(self, urls: List[str], store_id: str) -> List[Optional[Dict]]:
+        """Fetch and extract prices for ChefStore products asynchronously."""
+        proxies = {"http": "http://scraperapi:APIKEY@proxy-server.scraperapi.com:8001"}
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        session.headers.update(headers)
+        set_store_url = "https://www.chefstore.com/cfcs/accountDAO.cfc?method=setStoreSessionAjax&storeNum=" + store_id + "&_=1738632451401"
+        response = session.get(set_store_url, proxies=proxies)
+        # check response
+        if response.status_code == 200:
+            logger.info("Store session request successful")
+        
+        async def fetch_and_extract(url: str):
+            try:
+                fetch_result = session.get(url, headers=headers, proxies=proxies)
+                if fetch_result.status_code == 200:
+                    return await self.extract_product_info(fetch_result.text, url)
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {e}")
+                return None
+
+        return await asyncio.gather(*(fetch_and_extract(url) for url in urls))
+
+    def transform_url(self, url: str, store_id: str) -> str:
+        """Transform ChefStore product URL to API URL."""
+        try:
+            # Extract product ID from URL
+            product_id = re.search(r'product-details\.(\d+)\.html', url)
+            if not product_id:
+                logger.error(f"Could not extract product ID from URL: {url}")
+                return url
+                
+            # Convert to API URL
+            api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id.group(1)}&banner=albertsons&storeId={store_id}"
+            logger.info(f"Transformed URL {url} to {api_url}")
+            return api_url
+        except Exception as e:
+            logger.error(f"Error transforming URL {url}: {e}")
+            return url
 
     async def extract_product_info(self, html: str, url: str) -> Optional[Dict]:
         """Extract product information from ChefStore HTML."""
@@ -29,56 +76,43 @@ class ChefStoreScraper(BaseScraper):
             selector = Selector(text=html)
             
             # Extract product data from script tag
-            script = selector.css('script[type="application/ld+json"]::text').get()
-            if not script:
-                logger.error("Could not find product JSON data")
+            scripts = selector.css('script[type="application/ld+json"]::text').get()
+            if not scripts:
+                logger.error("Could not find JSON-LD script in HTML")
                 return None
-                
-            data = json.loads(script)
-            if not isinstance(data, dict):
-                logger.error("Invalid product data format")
-                return None
-
-            # Extract basic info
-            name = data.get("name")
-            if not name:
-                logger.error("No product name found")
-                return None
-
-            # Extract price info
-            price = data.get("offers", {}).get("price")
-            price_string = f"${price}" if price else None
-
-            # Extract price per unit info
-            unit_pricing = data.get("offers", {}).get("unitPricing", {})
-            price_per_unit = unit_pricing.get("price", {}).get("value")
-            price_per_unit_string = f"${price_per_unit} per {unit_pricing.get('unitText')}" if price_per_unit else None
-
-            # Extract additional info
-            brand = data.get("brand", {}).get("name")
-            sku = data.get("sku")
-            category = data.get("category")
-
-            # Extract store info from meta tags
-            store_id = selector.css('meta[property="business:contact_data:store_code"]::attr(content)').get()
-            store_address = selector.css('meta[property="business:contact_data:street_address"]::attr(content)').get()
-            store_zip = selector.css('meta[property="business:contact_data:postal_code"]::attr(content)').get()
-
-            return {
-                "store": self.store_name,
+            
+            logger.info("Found JSON-LD script, parsing JSON")
+            data = json.loads(scripts)
+            
+            # Extract store information
+            store_link = selector.css('a.store-address-link::attr(href)').get()
+            store_id = store_link.split('/')[-2] if store_link else None
+            store_address = selector.css('a.store-address-link::text').get()
+            
+            # Extract price information from product-widget div
+            product_widget = selector.css('div.product-widget')
+            unit_price = product_widget.attrib.get('data-unitprice')
+            case_price = product_widget.attrib.get('data-caseprice')
+            
+            result = {
+                "store": "chef_store",
                 "url": url,
-                "name": name,
-                "price": float(price) if price else None,
-                "price_string": price_string,
-                "price_per_unit": float(price_per_unit) if price_per_unit else None,
-                "price_per_unit_string": price_per_unit_string,
+                "name": data.get("name"),
+                "price": float(case_price) if case_price else None,
+                "price_string": f"${case_price}/Case" if case_price else None,
+                "price_per_unit": float(unit_price) if unit_price else None,
+                "price_per_unit_string": f"${unit_price}" if unit_price else None,
                 "store_id": store_id,
                 "store_address": store_address,
-                "store_zip": store_zip,
-                "brand": brand,
-                "sku": sku,
-                "category": category
+
+                "sku": data.get("sku"),
+                "brand": data.get("brand", {}).get("name"),
+                "category": data.get("category")
             }
+            
+            logger.info(f"Successfully extracted product info: {result}")
+            return result
+
         except Exception as e:
             logger.error(f"Error extracting product info: {e}")
             return None

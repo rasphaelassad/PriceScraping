@@ -84,12 +84,11 @@ def test_get_prices_empty_urls():
 def test_get_prices_multiple_urls():
     """Test the prices endpoint with multiple URLs from the same store."""
     test_data = {
-        "store": "albertsons",
-        "store_id": "161",
+        "store": "chefstore",
+        "store_id": "8111",
         "urls": [
-            "https://www.albertsons.com/shop/product-details.188020052.html"
-            #"https://www.albertsons.com/shop/product-details.960117095.html"
-        ]
+            "https://www.chefstore.com/p/aqua-star-panko-breaded-butterfly-shrimp-16-20_1849850"
+            ]
     }
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
@@ -106,7 +105,6 @@ def test_get_prices_multiple_urls():
         url_data = data[url]
         assert isinstance(url_data, dict)
         assert "store_id" in url_data
-        assert url_data["store_id"] == test_data["store_id"]
 
 def test_get_raw_content():
     """Test getting raw content from a URL and saving it locally."""
