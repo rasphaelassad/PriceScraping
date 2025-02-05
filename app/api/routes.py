@@ -1,14 +1,19 @@
 """API route handlers."""
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, List
-from pydantic import HttpUrl
+from pydantic import HttpUrl, BaseModel
 from app.models import Product
-from app.scrapers import get_scraper_for_url, get_supported_stores
+from app.scrapers import get_scraper_for_store, get_supported_stores
 import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+class PriceRequest(BaseModel):
+    store: str
+    store_id: str
+    urls: List[HttpUrl]
 
 @router.get("/supported-stores", response_model=List[str])
 async def get_supported_stores_route() -> List[str]:
@@ -19,97 +24,43 @@ async def get_supported_stores_route() -> List[str]:
     return stores
 
 @router.post("/prices")
-async def get_prices(urls: List[HttpUrl]) -> Dict[str, Any]:
+async def get_prices(request: PriceRequest) -> Dict[str, Any]:
     """
-    Get prices for multiple URLs.
+    Get prices for multiple URLs from a specific store.
     
     Args:
-        urls: List of product URLs to scrape.
+        request: PriceRequest object containing store, store_id and URLs to scrape.
         
     Returns:
         Dictionary mapping URLs to their scraping results.
         
     Raises:
-        HTTPException: If any URLs are from unsupported stores.
+        HTTPException: If the store is not supported.
     """
-    logger.info(f"Received request to get prices for URLs: {urls}")
-    tasks = []
-    unsupported_urls = []
-
-    for url in urls:
-        try:
-            logger.info(f"Attempting to get scraper for URL: {url}")
-            scraper = get_scraper_for_url(str(url))
-            logger.info(f"Found scraper {scraper.__class__.__name__} for URL: {url}")
-            tasks.append(scraper.get_price(str(url)))
-        except ValueError as e:
-            logger.error(f"Error getting scraper for URL {url}: {str(e)}")
-            unsupported_urls.append({"url": str(url), "error": str(e)})
-
-    if unsupported_urls:
-        supported_stores = get_supported_stores()
-        logger.error(f"Found unsupported URLs: {unsupported_urls}")
-        logger.info(f"Supported stores are: {supported_stores}")
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Some URLs are from unsupported stores",
-                "unsupported_urls": unsupported_urls,
-                "supported_stores": supported_stores
-            }
-        )
-
-    logger.info(f"Starting price fetching for {len(tasks)} URLs")
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    response = dict(zip([str(url) for url in urls], results))
-    logger.info("Successfully gathered all prices")
-    return response
-
-@router.post("/raw-content")
-async def get_raw_content(urls: List[HttpUrl]) -> Dict[str, Any]:
-    """
-    Get raw HTML content for multiple URLs.
+    logger.info(f"Received request to get prices for store: {request.store}, store_id: {request.store_id}, URLs: {request.urls}")
     
-    Args:
-        urls: List of product URLs to scrape.
-        
-    Returns:
-        Dictionary mapping URLs to their raw HTML content and metadata.
-        
-    Raises:
-        HTTPException: If any URLs are from unsupported stores.
-    """
-    logger.info(f"Received request to get raw content for URLs: {urls}")
-    tasks = []
-    unsupported_urls = []
-
-    for url in urls:
-        try:
-            logger.info(f"Attempting to get scraper for URL: {url}")
-            scraper = get_scraper_for_url(str(url))
-            logger.info(f"Found scraper {scraper.__class__.__name__} for URL: {url}")
-            tasks.append(scraper.get_raw_content(str(url)))
-        except ValueError as e:
-            logger.error(f"Error getting scraper for URL {url}: {str(e)}")
-            unsupported_urls.append({"url": str(url), "error": str(e)})
-
-    if unsupported_urls:
+    # Validate store is supported and get scraper
+    try:
+        scraper = get_scraper_for_store(request.store)
+        logger.info(f"Using scraper {scraper.__class__.__name__}")
+    except ValueError as e:
+        logger.error(f"Store validation error: {str(e)}")
         supported_stores = get_supported_stores()
-        logger.error(f"Found unsupported URLs: {unsupported_urls}")
-        logger.info(f"Supported stores are: {supported_stores}")
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "Some URLs are from unsupported stores",
-                "unsupported_urls": unsupported_urls,
+                "message": str(e),
                 "supported_stores": supported_stores
             }
         )
 
-    logger.info(f"Starting raw content fetching for {len(tasks)} URLs")
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    response = dict(zip([str(url) for url in urls], results))
-    logger.info("Successfully gathered all raw content")
+    # Convert URLs to strings and fetch prices
+    urls = [str(url) for url in request.urls]
+    results = await scraper.get_prices(urls, store_id=request.store_id)
+    
+    # Create response dictionary mapping URLs to their results
+    response = dict(zip(urls, results))
+    logger.info("Successfully gathered all prices")
     return response
 
 @router.get("/health")

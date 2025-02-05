@@ -21,8 +21,8 @@ class BaseScraper(ABC):
     
     def __init__(self):
         """Initialize the scraper with API key and common settings."""
-        if not self.store_name or not self.url_pattern:
-            raise ValueError("Scraper must define store_name and url_pattern")
+        if not self.store_name:
+            raise ValueError("Scraper must define store_name")
             
         self.settings = get_settings()
         self.api_key = self.settings.scraper_api_key
@@ -32,21 +32,10 @@ class BaseScraper(ABC):
         # Set up API endpoint
         self.base_url = self.settings.scraper_api_base_url
 
-    @classmethod
-    def can_handle_url(cls, url: str) -> bool:
-        """Check if this scraper can handle the given URL."""
-        if not cls.url_pattern:
-            raise NotImplementedError("url_pattern must be set in scraper subclass")
-        return bool(re.search(cls.url_pattern, url, re.IGNORECASE))
-
     @abstractmethod
     def get_scraper_config(self) -> dict:
         """Get store-specific scraper configuration."""
         pass
-
-    def transform_url(self, url: str) -> str:
-        """Transform URL if needed. Override in store-specific scrapers if needed."""
-        return url
 
     async def get_raw_content(self, url: str) -> Dict[str, Any]:
         """Get raw HTML content for a single URL without extracting product info."""
@@ -54,7 +43,7 @@ class BaseScraper(ABC):
         api_url = self.transform_url(url)
         
         try:
-            raw_result = await self._fetch_url(api_url)
+            raw_result = await self._fetch_data_async_from_scraperapi(api_url)
             if "error" in raw_result:
                 logger.error(f"Error fetching URL {url}: {raw_result['error']}")
                 raise ValueError(raw_result["error"])
@@ -70,24 +59,7 @@ class BaseScraper(ABC):
             logger.error(f"Error getting raw content for URL {url}: {e}")
             raise
 
-    async def get_price(self, url: str) -> Dict[str, Any]:
-        """Get price for a single URL."""
-        original_url = url
-        api_url = self.transform_url(url)
-        
-        try:
-            raw_result = await self._fetch_url(api_url)
-            if "error" in raw_result:
-                logger.error(f"Error fetching URL {url}: {raw_result['error']}")
-                raise ValueError(raw_result["error"])
-                
-            product_info = await self.extract_product_info(raw_result["content"], original_url)
-            return product_info
-        except Exception as e:
-            logger.error(f"Error getting price for URL {url}: {e}")
-            raise
-
-    async def _fetch_url(self, url: str) -> Dict[str, Any]:
+    async def fetch_data_async_from_scraperapi(self, url: str) -> Dict[str, Any]:
         """Fetch URL content with ScraperAPI using scraper configuration."""
         config = self.get_scraper_config()
         try:

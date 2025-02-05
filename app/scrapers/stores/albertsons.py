@@ -1,4 +1,5 @@
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, List
 from ..base import BaseScraper
 import json
 import logging
@@ -11,7 +12,6 @@ class AlbertsonsScraper(BaseScraper):
     """Scraper for Albertsons products."""
     
     store_name = "albertsons"
-    url_pattern = r"(?:www\.)?albertsons\.com/shop/product-details\.\d+\.html"
     
     def get_scraper_config(self) -> dict:
         """Get Albertsons-specific scraper configuration."""
@@ -27,7 +27,22 @@ class AlbertsonsScraper(BaseScraper):
             }
         }
 
-    def transform_url(self, url: str) -> str:
+    async def get_prices(self, urls: List[str], store_id: str) -> List[Optional[Dict]]:
+        """Fetch and extract prices for Albertsons products asynchronously."""
+        async def fetch_and_extract(url: str):
+            try:
+                api_url = self.transform_url(url, store_id)
+                fetch_result = await self.fetch_data_async_from_scraperapi(api_url)
+                return await self.extract_product_info(fetch_result['content'], url)
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {e}")
+                return None
+
+        return await asyncio.gather(*(fetch_and_extract(url) for url in urls))
+
+
+
+    def transform_url(self, url: str, store_id: str) -> str:
         """Transform Albertsons product URL to API URL."""
         try:
             # Extract product ID from URL
@@ -37,7 +52,7 @@ class AlbertsonsScraper(BaseScraper):
                 return url
                 
             # Convert to API URL
-            api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id.group(1)}&banner=albertsons&storeId=177"
+            api_url = f"https://www.albertsons.com/abs/pub/xapi/product/v2/pdpdata?bpn={product_id.group(1)}&banner=albertsons&storeId={store_id}"
             logger.info(f"Transformed URL {url} to {api_url}")
             return api_url
         except Exception as e:

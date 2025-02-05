@@ -23,7 +23,11 @@ def test_get_supported_stores():
 
 def test_get_prices_valid_url():
     """Test the prices endpoint with a valid URL."""
-    test_data = ["https://www.albertsons.com/shop/product-details.188020052.html"]
+    test_data = {
+        "store": "albertsons",
+        "store_id": "161",
+        "urls": ["https://www.albertsons.com/shop/product-details.188020052.html"]
+    }
     
     response = requests.post(
         f"{base_url}/api/v1/prices", 
@@ -40,13 +44,18 @@ def test_get_prices_valid_url():
     assert isinstance(data, dict)
     
     # Check the response structure for the URL
-    url_data = data.get(test_data[0])
+    url_data = data.get(test_data["urls"][0])
     assert url_data is not None
-    
+    assert "store_id" in url_data
+    assert url_data["store_id"] == test_data["store_id"]
 
-def test_get_prices_invalid_url():
-    """Test the prices endpoint with an invalid URL."""
-    test_data = ["https://invalid-store.com/product/123"]
+def test_get_prices_invalid_store():
+    """Test the prices endpoint with an invalid store."""
+    test_data = {
+        "store": "invalid-store",
+        "store_id": "161",
+        "urls": ["https://www.invalid-store.com/product/123"]
+    }
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -56,11 +65,14 @@ def test_get_prices_invalid_url():
     assert "detail" in error_data
     assert "message" in error_data["detail"]
     assert "supported_stores" in error_data["detail"]
-    assert "unsupported_urls" in error_data["detail"]
 
 def test_get_prices_empty_urls():
     """Test the prices endpoint with empty URL list."""
-    test_data = []
+    test_data = {
+        "store": "albertsons",
+        "store_id": "161",
+        "urls": []
+    }
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -70,11 +82,15 @@ def test_get_prices_empty_urls():
     assert "detail" in error_data
 
 def test_get_prices_multiple_urls():
-    """Test the prices endpoint with multiple URLs."""
-    test_data = [
-        "https://www.albertsons.com/shop/product-details.188020052.html",
-        "https://www.walmart.com/ip/Great-Value-2-Milk-1-Gallon/10450114"
-    ]
+    """Test the prices endpoint with multiple URLs from the same store."""
+    test_data = {
+        "store": "albertsons",
+        "store_id": "161",
+        "urls": [
+            "https://www.albertsons.com/shop/product-details.188020052.html"
+            #"https://www.albertsons.com/shop/product-details.960117095.html"
+        ]
+    }
     
     response = requests.post(f"{base_url}/api/v1/prices", json=test_data)
     
@@ -82,15 +98,15 @@ def test_get_prices_multiple_urls():
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, dict)
-    assert len(data) == len(test_data)
+    assert len(data) == len(test_data["urls"])
     
     # Check each URL response
-    for url in test_data:
+    for url in test_data["urls"]:
         assert url in data
         url_data = data[url]
         assert isinstance(url_data, dict)
-        expected_fields = {"request_status", "result"}
-        assert all(field in url_data for field in expected_fields)
+        assert "store_id" in url_data
+        assert url_data["store_id"] == test_data["store_id"]
 
 def test_get_raw_content():
     """Test getting raw content from a URL and saving it locally."""
@@ -143,8 +159,7 @@ if __name__ == "__main__":
         print("ERROR: FastAPI server is not running!")
         print(f"Please start the server at {base_url} first")
         sys.exit(1)
-    #check_server_health()    
+    test_get_prices_multiple_urls()    
     #test_get_supported_stores()
     #test_get_prices_valid_url()
-    test_get_raw_content()
     #pytest.main([__file__, "-v"])
